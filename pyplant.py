@@ -23,25 +23,19 @@ def ReactorFunc(func):
     return func
 
 
-# def Produces(func, *args):
-#     print("decorating {}".format(func.__name__))
-#
-#     assert('pyplant' in func.__dict__)
-#
-#     return func
-
-
 class Plant:
 
     def __init__(self, plantDir: str):
+
+        if not os.path.exists(plantDir):
+            os.makedirs(plantDir)
+
         self.plantDir = plantDir
         self.reactors = {}
         self.ingredients = {}
         self.warehouse = Warehouse(plantDir)
         self.pipeworks = {}
         self.config = {}
-
-        os.makedirs(self.plantDir)
 
         plantPath = os.path.join(self.plantDir, 'plant.pcl')
         if os.path.exists(plantPath):
@@ -50,12 +44,17 @@ class Plant:
                 self.reactors = plantCache['reactors']
                 self.ingredients = plantCache['ingredients']
 
+            for ingredient in self.ingredients.values():
+                ingredient.on_cache_load()
+
     def shutdown(self):
         print("Shutting down the plant.")
 
-        pickle.dump({
-            'reactors': self.reactors
-        }, os.path.join(self.plantDir, 'plant.pcl'))
+        with open(os.path.join(self.plantDir, 'plant.pcl'), 'wb') as file:
+            pickle.dump({
+                'reactors': self.reactors,
+                'ingredients': self.ingredients
+            }, file)
 
         self.warehouse.close()
 
@@ -85,18 +84,21 @@ class Plant:
 
         self.get_or_create_ingredient(ingredientName)
         reactor = self.get_producing_reactor(ingredientName)
-        if reactor is None:
+        if reactor is not None:
+            self._run_reactor(reactor)
+        else:
             print("The producing reactor is not found. Running new reactors...")
-            for reactor in self.reactors:
+            for reactor in self.reactors.values():
                 if not reactor.wasRun:
                     self._run_reactor(reactor)
-                    if ingredientName in reactor.inputs:
-                        print("Found reactor '{}' that produces '{}'".format(reactor.name, ingredientName))
-                        break  # Found a reactor that produced the ingredient.
+                    producer = self.get_producing_reactor(ingredientName)
+                    if producer is not None:
+                        # The producer is either the reactor we've just run, or it was called when producing
+                        # its required inputs.
+                        print("Found reactor '{}' that produces '{}'".format(producer.name, ingredientName))
+                        return  # Found a reactor that produced the ingredient.
 
-            raise RuntimeError("Found no reactor that produces ingredient {}.".format(ingredientName))
-        else:
-            self._run_reactor(reactor)
+            raise RuntimeError("Found no reactor that produces ingredient '{}'.".format(ingredientName))
 
     def compute_ingredient_signature(self, ingredientName):
         print("Computing signature for ingredient '{}'.".format(ingredientName))
@@ -131,7 +133,7 @@ class Plant:
         ingredient = self.get_or_create_ingredient(ingredientName)
         ingredient.set_current_signature(fullSignature)
 
-        print("Computed signature: '{}'".format(ingredient.signature))
+        print("Computed signature for '{}': '{}'".format(ingredient.name, ingredient.signature))
         return fullSignature
 
     def run_reactor(self, reactorFunc: Callable):
@@ -140,23 +142,27 @@ class Plant:
 
         self._run_reactor(reactor)
 
-    def _run_reactor(self, reactorObject: Reactor):
+    def _run_reactor(self, reactorObject: 'Reactor'):
         print("Running reactor '{}'.".format(reactorObject.name))
         if not reactorObject.wasRun:
             reactorObject.reset_metadata()
 
         pipework = self.get_or_create_pipework(reactorObject)
+
+        # It's important to set the flag early, so that we don't run the same reactor over and over,
+        # while looking for unknown ingredients.
+        reactorObject.wasRun = True
         reactorObject.func(pipework)
 
-    def get_producing_reactor(self, name: str) -> Reactor:
-        matchingReactors = (r for r in self.reactors if r.does_produce(name))
+    def get_producing_reactor(self, ingredientName: str) -> 'Reactor':
+        matchingReactors = (r for name, r in self.reactors.items() if r.does_produce(ingredientName))
         return next(matchingReactors, None)
 
-    def get_ingredient(self, name: str) -> Ingredient:
-        matchingIngredients = (r for r in self.ingredients if r.does_produce(name))
+    def get_ingredient(self, name: str) -> 'Ingredient':
+        matchingIngredients = (i for n, i in self.ingredients.items() if n == name)
         return next(matchingIngredients, None)
 
-    def get_or_create_ingredient(self, name: str) -> Ingredient:
+    def get_or_create_ingredient(self, name: str) -> 'Ingredient':
         ingredient = self.get_ingredient(name)
         if ingredient is None:
             ingredient = Ingredient(name)
@@ -164,7 +170,7 @@ class Plant:
 
         return ingredient
 
-    def get_or_create_pipework(self, reactor: Reactor):
+    def get_or_create_pipework(self, reactor: 'Reactor'):
         if reactor.name not in self.pipeworks:
             print("Creating pipework for reactor '{}'.".format(reactor.name))
             self.pipeworks[reactor.name] = Pipework(self, self.warehouse, reactor)
@@ -172,12 +178,18 @@ class Plant:
         return self.pipeworks[reactor.name]
 
     def set_config(self, configMap):
-        pass
+        self.config = configMap
+
+    def get_config_param(self, name: str) -> Any:
+        if name in self.config:
+            return self.config[name]
+
+        raise RuntimeError("Unknown config parameter: '{}'".format(name))
 
 
 class Pipework:
 
-    def __init__(self, plant: Plant, warehouse: Warehouse, connectedReactor: Reactor):
+    def __init__(self, plant: Plant, warehouse: 'Warehouse', connectedReactor: 'Reactor'):
         self.plant = plant
         self.warehouse = warehouse
         self.connectedReactor = connectedReactor  # Which reactor this pipework is connected to.
@@ -198,30 +210,35 @@ class Pipework:
 
         return ingredientValue
 
-    def send(self, name: str, value: Any, type: Ingredient.Type):
+    def send(self, name: str, value: Any, type: 'Ingredient.Type'):
         print("Reactor '{}' is sending ingredient '{}'".format(self.connectedReactor.name, name))
 
-        ingredient = self.plant.get_or_create_ingredient(name)
-        ingredient.type = type
-        ingredient.producerName = self.connectedReactor.name
-
+        ingredient = self._register_output(name, type)
         self.warehouse.store(ingredient, value)
 
-    def allocate(self, name: str, type: Ingredient.Type, **kwargs):
+    def allocate(self, name: str, type: 'Ingredient.Type', **kwargs):
         print("Reactor '{}' is allocating ingredient '{}'".format(self.connectedReactor.name, name))
 
+        ingredient = self._register_output(name, type)
+        return self.warehouse.allocate(ingredient, **kwargs)
+
+    def read_config(self, paramName: str) -> Any:
+        self.connectedReactor.register_parameter(paramName)
+
+        return self.plant.get_config_param(paramName)
+
+    def _register_output(self, name, type):
+        self.connectedReactor.register_output(name)
         ingredient = self.plant.get_or_create_ingredient(name)
         ingredient.type = type
         ingredient.producerName = self.connectedReactor.name
 
-        return self.warehouse.allocate(ingredient, **kwargs)
+        # Now that we have registered the ingredient, we can compute it's current signature.
+        self.plant.compute_ingredient_signature(name)
 
-    def read_config(self, paramName):
-        self.connectedReactor.register_parameter(paramName)
+        assert(ingredient.signature is not None)
 
-        #todo
-
-        return 13
+        return ingredient
 
 
 class Reactor:
@@ -231,6 +248,7 @@ class Reactor:
         self.name = name
         self.wasRun = False
         self.inputs = set({})
+        self.outputs = set({})
         self.params = set({})
 
         sourceLines = inspect.getsourcelines(func)
@@ -247,6 +265,9 @@ class Reactor:
     def get_params(self):
         return self.params
 
+    def does_produce(self, name: str) -> bool:
+        return name in self.outputs
+
     def register_parameter(self, name):
         if 'params' not in self.__dict__:
             self.params = {name}
@@ -258,6 +279,12 @@ class Reactor:
             self.inputs = {name}
         else:
             self.inputs.add(name)
+
+    def register_output(self, name):
+        if 'outputs' not in self.__dict__:
+            self.outputs = {name}
+        else:
+            self.outputs.add(name)
 
     def reset_metadata(self):
         self.inputs = set()
@@ -284,13 +311,16 @@ class Ingredient:
         self.signature = signature
         self.isSignatureFresh = True
 
+    def on_cache_load(self):
+        self.isSignatureFresh = False
+
 
 class Warehouse:
 
     def __init__(self, baseDir):
         self.baseDir = baseDir
         self.cache = {}
-        self.h5File = h5py.File(baseDir + 'warehouse.h5py', mode='r+')
+        self.h5File = h5py.File(baseDir + 'warehouse.h5py', mode='a')
 
         manifestPath = os.path.join(self.baseDir + 'manifest.pcl')
         if os.path.exists(manifestPath):
@@ -312,9 +342,9 @@ class Warehouse:
         if name not in self.manifest:
             print("Ingredient is not in the warehouse.")
             return None
-        elif signature is not None and signature != self.manifest[name].signature:
+        elif signature is not None and signature != self.manifest[name]['signature']:
             # The stored ingredient is outdated (Right now we only store a single version of an ingredient).
-            print("Ingredient is outdated. Pruing from the warehouse.")
+            print("Ingredient is outdated. Pruning from the warehouse.")
             self._prune(name)
             return None
 
@@ -338,7 +368,7 @@ class Warehouse:
     def store(self, ingredient: Ingredient, value: Any):
         print("Storing ingredient '{}' in the warehouse.".format(ingredient.name))
         if ingredient.name in self.manifest:
-            print("Ingredient os already in the warehouse, pruning.")
+            print("Ingredient is already in the warehouse, pruning.")
             self._prune(ingredient.name)
 
         if ingredient.type == Ingredient.Type.simple:
@@ -362,7 +392,7 @@ class Warehouse:
     def allocate(self, ingredient: Ingredient, **kwargs):
         print("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
         if ingredient.type != Ingredient.Type.huge_array:
-            raise RuntimeError("Cannot allocate an ingredient of type {}".format(ingredient.type))
+            raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
         return self._allocate_huge_array(ingredient.name, **kwargs)
 
@@ -389,10 +419,10 @@ class Warehouse:
         return None
 
     def _store_array(self, name, value: np.ndarray):
-        np.save(os.path.join(self.baseDir, name), value, allow_pickle=False)
+        np.save(os.path.join(self.baseDir, '{}.npy'.format(name)), value, allow_pickle=False)
 
     def _fetch_array(self, name):
-        return np.load(os.path.join(self.baseDir, name), allow_pickle=False)
+        return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)), allow_pickle=False)
 
     def _allocate_huge_array(self, name, shape, dtype):
         dataset = self._fetch_huge_array(name)
@@ -412,3 +442,8 @@ class Warehouse:
 
     def close(self):
         self.h5File.close()
+
+        manifestPath = os.path.join(self.baseDir + 'manifest.pcl')
+        if os.path.exists(manifestPath):
+            with open(manifestPath, 'wb') as file:
+                pickle.dump(self.manifest, file)
