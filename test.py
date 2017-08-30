@@ -36,8 +36,24 @@ def reactor_c(pipe: pyplant.Pipework):
 @pyplant.ReactorFunc
 def reactor_d(pipe: pyplant.Pipework):
     newRange = yield pipe.receive('newRange')
+    hugeArray = yield pipe.receive('huge_array')
 
+
+    nonzero = np.count_nonzero(hugeArray[...])
     print(newRange)
+    print(nonzero)
+
+
+@pyplant.ReactorFunc
+def reactor_huge_array(pipe: pyplant.Pipework):
+    array = pipe.allocate('huge_array', pyplant.Ingredient.Type.huge_array, shape=(100, 255, 255))
+    array[...] = 1.0
+    array[:50, ...] = 0.0
+
+
+    pipe.send('huge_array', array, pyplant.Ingredient.Type.huge_array)
+
+    yield
 
 
 plant = pyplant.Plant('C:\\preloaded_data\\test')
@@ -46,7 +62,7 @@ plant = pyplant.Plant('C:\\preloaded_data\\test')
 plant.set_config({
     'element_number': 20
 })
-plant.add_reactors(reactor_a, reactor_b, reactor_c, reactor_d)
+plant.add_reactors(reactor_a, reactor_b, reactor_c, reactor_d, reactor_huge_array)
 
 plant.run_reactor(reactor_d)
 
