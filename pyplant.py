@@ -2,7 +2,7 @@ import os
 import pickle
 import inspect
 import hashlib
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Dict, Generator
 from enum import Enum
 from types import SimpleNamespace
 
@@ -25,6 +25,20 @@ def ReactorFunc(func):
 
 class Plant:
 
+    class RunningReactor:
+
+        def __init__(self, name: str, reactorObject: 'Reactor', generator: object):
+
+            self.name = name
+            self.reactorObject = reactorObject
+            self.generator = generator  # type: Generator[Any, Any]
+            self.awaitedIngredient = None  # type: str
+
+    class IngredientAwaitedCommand:
+
+        def __init__(self, ingredientName: str):
+            self.ingredientName = ingredientName
+
     def __init__(self, plantDir: str):
 
         if not os.path.exists(plantDir):
@@ -32,7 +46,8 @@ class Plant:
 
         self.plantDir = plantDir
         self.reactors = {}
-        self.ingredients = {}
+        self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
+        self.ingredients = {}  # type: Dict[str, Ingredient]
         self.warehouse = Warehouse(plantDir)
         self.pipeworks = {}
         self.config = {}
@@ -46,6 +61,9 @@ class Plant:
 
             for ingredient in self.ingredients.values():
                 ingredient.on_cache_load()
+
+            for reactor in self.reactors.values():
+                reactor.on_cache_load()
 
     def shutdown(self):
         print("Shutting down the plant.")
@@ -79,26 +97,16 @@ class Plant:
     def is_ingredient_known(self, name: str):
         return name in self.ingredients
 
-    def produce_ingredient(self, ingredientName):
+    def _try_produce_ingredient(self, ingredientName):
         print("Producing ingredient '{}'.".format(ingredientName))
 
         self.get_or_create_ingredient(ingredientName)
         reactor = self.get_producing_reactor(ingredientName)
         if reactor is not None:
-            self._run_reactor(reactor)
+            print("Found the producing reactor '{}', scheduling.".format(reactor.name))
+            self._start_reactor(reactor)
         else:
-            print("The producing reactor is not found. Running new reactors...")
-            for reactor in self.reactors.values():
-                if not reactor.wasRun:
-                    self._run_reactor(reactor)
-                    producer = self.get_producing_reactor(ingredientName)
-                    if producer is not None:
-                        # The producer is either the reactor we've just run, or it was called when producing
-                        # its required inputs.
-                        print("Found reactor '{}' that produces '{}'".format(producer.name, ingredientName))
-                        return  # Found a reactor that produced the ingredient.
-
-            raise RuntimeError("Found no reactor that produces ingredient '{}'.".format(ingredientName))
+            print("Do not know how to produce '{}'.".format(ingredientName))
 
     def compute_ingredient_signature(self, ingredientName):
         print("Computing signature for ingredient '{}'.".format(ingredientName))
@@ -109,22 +117,24 @@ class Plant:
 
         reactor = self.get_producing_reactor(ingredientName)
 
-        if reactor is None or not reactor.wasRun:
+        # todo cleaner code?
+        if reactor is None or (not reactor.wasRun and reactor.name not in self.runningReactors):
             print("Producing reactor unknown, signature unknown.")
             return None  # Don't know the reactor, or it has changed.
-        
+
         print("Collecting sub-ingredient signatures...")
         subingredientSignatures = []
-        for subingredientName in reactor.get_inputs():
+        for subingredientName in sorted(reactor.get_inputs()):
             subsignature = self.compute_ingredient_signature(subingredientName)
             if subsignature is None:
+                print("Signature for '{}' is unknown.".format(ingredientName))
                 return None
-            subingredientSignatures.append(subingredientName)
+            subingredientSignatures.append(subsignature)
 
         print("Sub-ingredients' signatures found.")
         subingredientSignature = hashlib.sha1(''.join(subingredientSignatures).encode('utf-8')).hexdigest()
 
-        parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in reactor.get_params()]
+        parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())]
         parameterSignature = hashlib.sha1(''.join(parameterStrings).encode('utf-8')).hexdigest()
 
         signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature]
@@ -140,19 +150,78 @@ class Plant:
         assert(callable(reactorFunc))
         reactor = self.reactors[reactorFunc.__name__]
 
-        self._run_reactor(reactor)
+        assert(len(self.runningReactors) == 0)
+        self._start_reactor(reactor)
+        self._finish_all_running_reactors()
 
-    def _run_reactor(self, reactorObject: 'Reactor'):
-        print("Running reactor '{}'.".format(reactorObject.name))
+    def _start_reactor(self, reactorObject: 'Reactor') -> 'RunningReactor':
+        print("Starting reactor '{}'.".format(reactorObject.name))
         if not reactorObject.wasRun:
             reactorObject.reset_metadata()
 
         pipework = self.get_or_create_pipework(reactorObject)
 
-        # It's important to set the flag early, so that we don't run the same reactor over and over,
-        # while looking for unknown ingredients.
-        reactorObject.wasRun = True
-        reactorObject.func(pipework)
+        generator = reactorObject.func(pipework)
+        if not inspect.isgenerator(generator):
+            raise RuntimeError("Reactor '{}' is not a generator function!".format(reactorObject.name))
+
+        runningReactor = Plant.RunningReactor(reactorObject.name, reactorObject, generator)
+        self.runningReactors[reactorObject.name] = runningReactor
+
+        return runningReactor
+
+    def _finish_all_running_reactors(self):
+
+        print("Trying to finish all running reactors.")
+
+        while len(self.runningReactors) != 0:
+            nextReactor = None  # type: Plant.RunningReactor
+            for name, runningReactor in self.runningReactors.items():
+                if runningReactor.awaitedIngredient is None or \
+                        self.is_ingredient_fresh(runningReactor.awaitedIngredient):
+                    nextReactor = runningReactor
+                    break
+
+            if nextReactor is None:
+                print("Some ingredients are missing. Running new reactors...")
+                for reactor in self.reactors.values():
+                    if not reactor.wasRun and not reactor.name in self.runningReactors:
+                        nextReactor = self._start_reactor(reactor)
+                        break
+
+            if nextReactor is None:
+                #todo dump current plant state for debug.
+                raise RuntimeError("Could not find a reactor that should run next. Deadlock?")
+
+            print("Next reactor to run: '{}'".format(nextReactor.name))
+
+            valueToSend = None
+            if nextReactor.awaitedIngredient is not None:
+                print("Providing reactor '{}' with ingredient '{}'"
+                      .format(nextReactor.name, nextReactor.awaitedIngredient))
+                valueToSend = self.warehouse.fetch(nextReactor.awaitedIngredient)
+
+            missingIngredient = None
+            while missingIngredient is None:
+                try:
+                    returnedObject = nextReactor.generator.send(valueToSend)
+                    if type(returnedObject) is Plant.IngredientAwaitedCommand:
+                        nextReactor.awaitedIngredient = returnedObject.ingredientName
+                        missingIngredient = returnedObject.ingredientName
+                    else:
+                        valueToSend = returnedObject
+
+                except StopIteration:
+                    print("Reactor '{}' has finished running.".format(nextReactor.name))
+                    del self.runningReactors[nextReactor.name]
+                    nextReactor.reactorObject.wasRun = True
+                    break
+
+            if missingIngredient is not None:
+                print("Will try to produce '{}' for reactor '{}'.".format(missingIngredient, nextReactor.name))
+                self._try_produce_ingredient(missingIngredient)
+
+        print("Finished running all reactors.")
 
     def get_producing_reactor(self, ingredientName: str) -> 'Reactor':
         matchingReactors = (r for name, r in self.reactors.items() if r.does_produce(ingredientName))
@@ -169,6 +238,9 @@ class Plant:
             self.ingredients[name] = ingredient
 
         return ingredient
+
+    def is_ingredient_fresh(self, name: str):
+        return name in self.ingredients and self.ingredients[name].isFresh
 
     def get_or_create_pipework(self, reactor: 'Reactor'):
         if reactor.name not in self.pipeworks:
@@ -200,13 +272,11 @@ class Pipework:
 
         signature = self.plant.compute_ingredient_signature(name)
         if signature is None:
-            self.plant.produce_ingredient(name)
-            return self.warehouse.fetch(name)
+            return Plant.IngredientAwaitedCommand(name)
 
         ingredientValue = self.warehouse.fetch(name, signature)
         if ingredientValue is None:
-            self.plant.produce_ingredient(name)
-            return self.warehouse.fetch(name)
+            return Plant.IngredientAwaitedCommand(name)
 
         return ingredientValue
 
@@ -228,10 +298,12 @@ class Pipework:
         return self.plant.get_config_param(paramName)
 
     def _register_output(self, name, type):
-        self.connectedReactor.register_output(name)
         ingredient = self.plant.get_or_create_ingredient(name)
         ingredient.type = type
         ingredient.producerName = self.connectedReactor.name
+        ingredient.isFresh = True
+
+        self.connectedReactor.register_output(name)
 
         # Now that we have registered the ingredient, we can compute it's current signature.
         self.plant.compute_ingredient_signature(name)
@@ -245,6 +317,7 @@ class Reactor:
 
     def __init__(self, name: str, func: Callable[[Pipework], None]):
         self.func = func
+        self.generator = None
         self.name = name
         self.wasRun = False
         self.inputs = set({})
@@ -290,6 +363,10 @@ class Reactor:
         self.inputs = set()
         self.params = set()
 
+    def on_cache_load(self):
+        self.func = None
+        self.generator = None
+
 
 class Ingredient:
 
@@ -304,6 +381,7 @@ class Ingredient:
         self.name = name
         self.signature = None
         self.isSignatureFresh = False
+        self.isFresh = False  # Whether has been produced during the current plant run (not loaded from disk).
         self.type = Ingredient.Type.unknown
         self.producerName = None
 
@@ -313,6 +391,7 @@ class Ingredient:
 
     def on_cache_load(self):
         self.isSignatureFresh = False
+        self.isFresh = False
 
 
 class Warehouse:
@@ -353,7 +432,7 @@ class Warehouse:
             return self.cache[name]
 
         print("Fetching the ingredient from disk.")
-        type = self.manifest[name].type
+        type = self.manifest[name]['type']
         if type == Ingredient.Type.simple:
             return self._fetch_simple(name)
         elif type == Ingredient.Type.list:
@@ -444,6 +523,5 @@ class Warehouse:
         self.h5File.close()
 
         manifestPath = os.path.join(self.baseDir + 'manifest.pcl')
-        if os.path.exists(manifestPath):
-            with open(manifestPath, 'wb') as file:
-                pickle.dump(self.manifest, file)
+        with open(manifestPath, 'wb') as file:
+            pickle.dump(self.manifest, file)

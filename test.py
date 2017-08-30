@@ -7,13 +7,16 @@ import numpy as np
 def reactor_a(pipe: pyplant.Pipework):
 
     maxElems = pipe.read_config('element_number')
+
     pipe.send('range', np.arange(0, maxElems), pyplant.Ingredient.Type.array)
+
+    yield
 
 
 @pyplant.ReactorFunc
 def reactor_b(pipe: pyplant.Pipework):
 
-    range = pipe.receive('range')
+    range = yield pipe.receive('range')
     avg = np.mean(range)
 
     pipe.send('avg', avg, pyplant.Ingredient.Type.simple)
@@ -22,8 +25,8 @@ def reactor_b(pipe: pyplant.Pipework):
 @pyplant.ReactorFunc
 def reactor_c(pipe: pyplant.Pipework):
 
-    range = pipe.receive('range')
-    avg = pipe.receive('avg')
+    range = yield pipe.receive('range')
+    avg = yield pipe.receive('avg')
 
     newRange = range + avg
 
@@ -32,7 +35,7 @@ def reactor_c(pipe: pyplant.Pipework):
 
 @pyplant.ReactorFunc
 def reactor_d(pipe: pyplant.Pipework):
-    newRange = pipe.receive('newRange')
+    newRange = yield pipe.receive('newRange')
 
     print(newRange)
 
@@ -49,3 +52,20 @@ plant.run_reactor(reactor_d)
 
 plant.shutdown()
 
+# def simple_generator(a):
+#     print(a)
+#     a = yield a
+#     print(a)
+#     a = yield a
+#     print(a)
+#     a = yield a
+#     print(a)
+#
+# gen = simple_generator(1)
+# val = None
+# while True:
+#     try:
+#         val = gen.send(val * 2 if val is not None else val)
+#     except StopIteration:
+#         print('Stop.')
+#         break
