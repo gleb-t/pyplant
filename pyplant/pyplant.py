@@ -25,7 +25,7 @@ class Plant:
 
     class RunningReactor:
 
-        def __init__(self, name: str, reactorObject: 'Reactor', generator: object):
+        def __init__(self, name: str, reactorObject: 'Reactor', generator: object=None):
 
             self.name = name
             self.reactorObject = reactorObject
@@ -62,6 +62,12 @@ class Plant:
 
             for reactor in self.reactors.values():
                 reactor.on_cache_load()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
 
     def shutdown(self):
         print("Shutting down the plant.")
@@ -174,14 +180,17 @@ class Plant:
         # Each reactor needs a pipework to send and receive data.
         pipework = self._get_or_create_pipework(reactorObject)
 
-        # Reactors are generator functions. Obtain a generator object.
+        # Schedule execution.
+        runningReactor = Plant.RunningReactor(reactorObject.name, reactorObject)
+        self.runningReactors[reactorObject.name] = runningReactor
+
+        # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
         generator = reactorObject.func(pipework)
         if not inspect.isgenerator(generator):
             raise RuntimeError("Reactor '{}' is not a generator function!".format(reactorObject.name))
 
-        # Schedule execution.
-        runningReactor = Plant.RunningReactor(reactorObject.name, reactorObject, generator)
-        self.runningReactors[reactorObject.name] = runningReactor
+        # Save the generator object for further execution.
+        runningReactor.generator = generator
 
         return runningReactor
 
