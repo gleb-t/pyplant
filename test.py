@@ -1,40 +1,40 @@
 
-import pyplant
+from pyplant import *
 import numpy as np
 
 
-@pyplant.ReactorFunc
-def reactor_a(pipe: pyplant.Pipework):
+@ReactorFunc
+def reactor_a(pipe: Pipework):
 
     maxElems = pipe.read_config('element_number')
 
-    pipe.send('range', np.arange(0, maxElems), pyplant.Ingredient.Type.array)
+    pipe.send('range', np.arange(0, maxElems), Ingredient.Type.array)
 
     yield
 
 
-@pyplant.ReactorFunc
-def reactor_b(pipe: pyplant.Pipework):
+@ReactorFunc
+def reactor_b(pipe: Pipework):
 
     range = yield pipe.receive('range')
     avg = np.mean(range)
 
-    pipe.send('avg', avg, pyplant.Ingredient.Type.simple)
+    pipe.send('avg', avg, Ingredient.Type.simple)
 
 
-@pyplant.ReactorFunc
-def reactor_c(pipe: pyplant.Pipework):
+@ReactorFunc
+def reactor_c(pipe: Pipework):
 
     range = yield pipe.receive('range')
     avg = yield pipe.receive('avg')
 
     newRange = range + avg
 
-    pipe.send('newRange', newRange, pyplant.Ingredient.Type.array)
+    pipe.send('newRange', newRange, Ingredient.Type.array)
 
 
-@pyplant.ReactorFunc
-def reactor_d(pipe: pyplant.Pipework):
+@ReactorFunc
+def reactor_d(pipe: Pipework):
     newRange = yield pipe.receive('newRange')
     hugeArray = yield pipe.receive('huge_array')
 
@@ -44,19 +44,18 @@ def reactor_d(pipe: pyplant.Pipework):
     print(nonzero)
 
 
-@pyplant.ReactorFunc
-def reactor_huge_array(pipe: pyplant.Pipework):
-    array = pipe.allocate('huge_array', pyplant.Ingredient.Type.huge_array, shape=(100, 255, 255))
+@ReactorFunc
+def reactor_huge_array(pipe: Pipework):
+    array = pipe.allocate('huge_array', Ingredient.Type.huge_array, shape=(100, 255, 255))
     array[...] = 1.0
     array[:50, ...] = 0.0
 
-
-    pipe.send('huge_array', array, pyplant.Ingredient.Type.huge_array)
+    pipe.send('huge_array', array, Ingredient.Type.huge_array)
 
     yield
 
 
-plant = pyplant.Plant('C:\\preloaded_data\\test')
+plant = Plant('C:\\preloaded_data\\test')
 
 
 plant.set_config({
