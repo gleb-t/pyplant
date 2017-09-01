@@ -37,11 +37,13 @@ def reactor_c(pipe: Pipework):
 def reactor_d(pipe: Pipework):
     newRange = yield pipe.receive('newRange')
     hugeArray = yield pipe.receive('huge_array')
+    doubleRange = yield pipe.receive('doubleRange')
 
 
     nonzero = np.count_nonzero(hugeArray[...])
     print(newRange)
     print(nonzero)
+    print(doubleRange)
 
 
 @ReactorFunc
@@ -54,6 +56,37 @@ def reactor_huge_array(pipe: Pipework):
 
     yield
 
+@ReactorFunc
+def reactor_with_subreactors(pipe: Pipework):
+
+    doubledRange = yield from subreactor_a(pipe)
+
+    pipe.send('doubleRange', doubledRange, Ingredient.Type.array)
+
+
+@SubreactorFunc
+def subreactor_a(pipe: Pipework):
+    yield from subreactor_b(pipe)
+    result = yield from subreactor_c(pipe)
+    return result
+
+
+@SubreactorFunc
+def subreactor_b(pipe: Pipework):
+
+    yield from subreactor_c(pipe)
+
+@SubreactorFunc
+def subreactor_c(pipe: Pipework):
+    result = yield from subreactor_d(pipe)
+    return result
+
+@SubreactorFunc
+def subreactor_d(pipe: Pipework):
+    range = yield pipe.receive('range')
+
+    return range * 2
+
 
 plant = Plant('C:\\preloaded_data\\test')
 
@@ -61,7 +94,7 @@ plant = Plant('C:\\preloaded_data\\test')
 plant.set_config({
     'element_number': 20
 })
-plant.add_reactors(reactor_a, reactor_b, reactor_c, reactor_d, reactor_huge_array)
+plant.add_reactors(reactor_a, reactor_b, reactor_c, reactor_d, reactor_huge_array, reactor_with_subreactors)
 
 plant.run_reactor(reactor_d)
 

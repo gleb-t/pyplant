@@ -2,15 +2,24 @@ import os
 import pickle
 import inspect
 import hashlib
-from typing import Callable, Optional, Any, Dict, Generator, Union
+from typing import Callable, Any, Dict, Generator, Union, List
 from enum import Enum
 from types import SimpleNamespace
 
 import numpy as np
 import h5py
 
-__all__ = ['Plant', 'ReactorFunc', 'Pipework', 'Ingredient']
+__all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 
+
+# Random documentation:
+#
+# Reactors are units of execution, whose results can be cached.
+# Subreactors are effectively 'plugged-in' into reactors, and execute code on their behalf.
+# The purpose of subreactors is to allow reactors to depend on subroutines, such that a change
+# to the code of a subroutine (subreactor) could be detected.
+# If the subroutine is not likely to change (e.g. a library), their is no benefit in using a subreactor.
+#
 
 def ReactorFunc(func):
     assert('pyplant' not in func.__dict__)
@@ -18,10 +27,60 @@ def ReactorFunc(func):
     func.pyplant = SimpleNamespace()
     func.pyplant.isReactor = True
 
+    if not inspect.isgeneratorfunction(func):
+        raise RuntimeError("ReactorFunc '{}' is not a generator function!".format(func.__name__))
+
     return func
 
 
+def SubreactorFunc(func):
+    """
+    Marks a 'subreactor' function which will be called as a sub-procedure from reactors.
+    Unlike with normal function calls, changed to a subreactor will trigger re-execution
+    of all dependent reactors.
+
+    Subreactors must be called as: returnValue = yield from sub_reactor(pipe)
+    Just like reactors, to request ingredients a subreactor should use 'yield' keyword.
+    To return a value to the caller a subreactor function should use 'return'.
+
+    All received/sent ingredients are attributed to the calling reactor. This means
+    that a change to an ingredient/code will trigger re-execution of the whole reactor,
+    not just of a subreactor.
+
+    :param func:
+    :return:
+    """
+    assert ('pyplant' not in func.__dict__)
+
+    func.pyplant = SimpleNamespace()
+    func.pyplant.isReactor = False
+    func.pyplant.isSubreactor = True
+
+    name = func.__name__
+
+    if not inspect.isgeneratorfunction(func):
+        raise RuntimeError("SubreactorFunc '{}' is not a generator function!".format(name))
+
+    # Store the current source hash globally. Will be needed for reactor signature computation.
+    hashString = _compute_function_hash(func)
+    Plant.SubreactorSourceHashes[name] = hashString
+
+    def _pyplant_subreactor_wrapper(*args, **kwargs):
+        # Notify the plant, that a subreactor is being called.
+        yield Plant.SubreactorStartedCommand(name)
+        # Delegate to the  subreactor, as if the reactor was running/yielding.
+        result = yield from func(*args, **kwargs)
+        # Propagate the returned value to the caller
+        return result
+
+    return _pyplant_subreactor_wrapper
+
+
 class Plant:
+
+    # Global store of current sub-reactor source hashes.
+    # Filled out during code importing through function augmentors.
+    SubreactorSourceHashes = {}  # type: Dict[str, str]
 
     class RunningReactor:
 
@@ -31,11 +90,17 @@ class Plant:
             self.reactorObject = reactorObject
             self.generator = generator  # type: Generator[Any, Any]
             self.awaitedIngredient = None  # type: str
+            self.subreactorCallStack = []  # type: List[str]
 
     class IngredientAwaitedCommand:
 
         def __init__(self, ingredientName: str):
             self.ingredientName = ingredientName
+
+    class SubreactorStartedCommand:
+
+        def __init__(self, subreactorName: Callable):
+            self.subreactorName = subreactorName
 
     def __init__(self, plantDir: str):
 
@@ -43,7 +108,8 @@ class Plant:
             os.makedirs(plantDir)
 
         self.plantDir = plantDir
-        self.reactors = {}
+        self.reactors = {}  # type: Dict[str, Reactor]
+        self.subreactors = {}  # type: Dict[str, Subreactor]
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
         self.ingredients = {}  # type: Dict[str, Ingredient]
         self.warehouse = Warehouse(plantDir)
@@ -84,25 +150,42 @@ class Plant:
         for func in args:
             assert(callable(func))
 
-            if 'pyplant' not in func.__dict__:
-                raise RuntimeError("{} is not a @ReactorFunc!".format(func))
+            if 'pyplant' not in func.__dict__ or not func.__dict__['pyplant'].isReactor:
+                raise RuntimeError("'{}' is not a @ReactorFunc!".format(func))
 
             name = func.__name__
-            reactor = Reactor(name, func)
 
             print("Adding reactor '{}'.".format(name))
 
-            if name in self.reactors and reactor.get_signature() == self.reactors[name].get_signature():
-                print("Reactor is already known. Storing the function.")
+            if name in self.reactors:
+                print("Reactor is already known. Storing the function, comparing signatures.")
+
+                oldSignature = self.reactors[name].signature
                 self.reactors[name].func = func
+
+                # Compute the current reactor signature, using whatever metadata was kept
+                # from the previous runs.
+                # (If there were no previous runs, the reactor will be re-run anyway,
+                #  obtaining a fresh signature. So, we do not check it here.)
+                self._compute_reactor_signature(name)
+
+                if self.reactors[name].signature != oldSignature:
+                    print("Reactor signature changed to '{}'. Metadata marked as outdated."
+                          .format(self.reactors[name].signature))
+                    self.reactors[name].wasRun = False  # This new version was never executed.
+                else:
+                    print("Reactor did not change.")
+
             else:
-                self.reactors[name] = reactor
+                self.reactors[name] = Reactor(name, func)
 
     def is_ingredient_known(self, name: str):
         return name in self.ingredients
 
     def run_reactor(self, reactorFunc: Callable):
         assert(callable(reactorFunc))
+        assert(reactorFunc.__name__ in self.reactors)  # All reactors must be added to the plant.
+
         reactor = self.reactors[reactorFunc.__name__]
 
         assert(len(self.runningReactors) == 0)
@@ -122,7 +205,7 @@ class Plant:
 
         # If we don't know the producing reactor, or it has changed and wasn't run yet,
         # we cannot compute the signature.
-        if reactor is None or (not reactor.wasRun and not self._is_reactor_running(reactor.name)):
+        if reactor is None or not reactor.wasRun:
             print("Producing reactor is unknown, signature is unknown.")
             return None
 
@@ -152,6 +235,34 @@ class Plant:
 
         print("Computed signature for '{}': '{}'".format(ingredient.name, ingredient.signature))
         return fullSignature
+
+    def _compute_reactor_signature(self, reactorName: str) -> str:
+        """
+        Computes and *updates* the signature of a reactor and
+        all its referenced subreactors.
+
+        :param reactorName:
+        :return:
+        """
+        assert(reactorName in self.reactors)  # Must be added already.
+
+        reactor = self.reactors[reactorName]
+        reactorBodyHash = _compute_function_hash(reactor.func)
+
+        nestedHashes = []
+        for subreactorName in sorted(reactor.subreactors):
+            # When a subreactor is imported, its hash must be stored in a static dict.
+            if subreactorName in Plant.SubreactorSourceHashes:
+                subreactorBodyHash = Plant.SubreactorSourceHashes[subreactorName]
+                nestedHashes.append(subreactorBodyHash)
+            else:
+                # If it's not there - subreactor was deleted, provide gibberish to change the signature,
+                # effectively marking the reactor outdated.
+                nestedHashes.append('unknown-hash-value-gibberish')
+
+        reactor.signature = _compute_string_hash(reactorBodyHash + ''.join(nestedHashes))
+
+        return reactor.signature
 
     def _try_produce_ingredient(self, ingredientName):
         """
@@ -203,7 +314,7 @@ class Plant:
         """
         print("Trying to finish all running reactors.")
 
-        # Main loop over the running reactor queue.
+        # Main loop over the running reactors.
         while len(self.runningReactors) != 0:
             nextReactor = None  # type: Plant.RunningReactor
             # Check if we have a paused reactor waiting for an ingredient that was just produced,
@@ -253,6 +364,11 @@ class Plant:
                         # A missing ingredient is was requested, will pause the reactor.
                         nextReactor.awaitedIngredient = returnedObject.ingredientName
                         missingIngredient = returnedObject.ingredientName
+                    elif type(returnedObject) is Plant.SubreactorStartedCommand:
+                        # A sub-reactor is being launched. Remember the dependency and continue execution.
+                        subreactorName = returnedObject.subreactorName
+                        print("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name, subreactorName))
+                        nextReactor.reactorObject.register_subreactor(subreactorName)
                     else:
                         # A reactor successfully fetched an ingredient, no need to pause, just use it.
                         valueToSend = returnedObject
@@ -260,7 +376,22 @@ class Plant:
                 except StopIteration:
                     print("Reactor '{}' has finished running.".format(nextReactor.name))
                     del self.runningReactors[nextReactor.name]
+
+                    # Finished running, update the signature, since now we surely know
+                    # all the referenced subreactors.
+                    self._compute_reactor_signature(nextReactor.name)
                     nextReactor.reactorObject.wasRun = True
+
+                    # Now that the reactor has finished running, we can compute the signatures for all
+                    # the ingredients that it has produced. (Now we now all the inputs and sub-reactors.)
+                    for outputName in nextReactor.reactorObject.outputs:
+                        if self._get_ingredient(outputName).isSignatureFresh:
+                            raise RuntimeError("Ingredient was overwritten, this is not supported.")
+
+                        signature = self._compute_ingredient_signature(outputName)
+                        assert(signature is not None)
+                        self.warehouse.sign_fresh_ingredient(outputName, signature)
+
                     break
 
             if missingIngredient is not None:
@@ -361,29 +492,27 @@ class Pipework:
 
         self.connectedReactor.register_output(name)
 
-        # Now that we have registered the ingredient, we can compute it's current signature.
-        self.plant._compute_ingredient_signature(name)
-
-        assert(ingredient.signature is not None)
-
         return ingredient
 
 
 class Reactor:
 
     def __init__(self, name: str, func: Callable[[Pipework], None]):
+
+        # Whether the current reactor version was executed in the past.
+        # If it was, we now that we can trust the metadata (inputs, outputs).
+        # Subreactors don't have this flag, since they don't have the metadata,
+        # they don't produce ingredients, it's all attributed to the parent reactor.
+        self.wasRun = False
+
+        self.name = name
         self.func = func
         self.generator = None
-        self.name = name
-        self.wasRun = False
         self.inputs = set({})
         self.outputs = set({})
         self.params = set({})
-
-        sourceLines = inspect.getsourcelines(func)
-        functionSource = ''.join(sourceLines[0])
-
-        self.signature = hashlib.sha1(functionSource.encode('utf-8')).hexdigest()
+        self.subreactors = set([])
+        self.signature = None
 
     def get_signature(self):
         return self.signature
@@ -412,9 +541,14 @@ class Reactor:
         else:
             self.outputs.add(name)
 
+    def register_subreactor(self, subreactorName):
+        self.subreactors.add(subreactorName)
+
     def reset_metadata(self):
         self.inputs = set()
+        self.outputs = set()
         self.params = set()
+        self.subreactors = set()
 
     def on_cache_load(self):
         self.func = None
@@ -528,6 +662,15 @@ class Warehouse:
 
         return self._allocate_huge_array(ingredient.name, **kwargs)
 
+    def sign_fresh_ingredient(self, ingredientName: str, signature: str):
+        print("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
+        assert(signature is not None)
+        assert(ingredientName in self.manifest)
+        assert(ingredientName in self.cache)  # Must be fresh, i.e. must be in cache.
+
+        # Store the new signature.
+        self.manifest[ingredientName]['signature'] = signature
+
     def _prune(self, name):
         pass
 
@@ -578,3 +721,14 @@ class Warehouse:
         manifestPath = os.path.join(self.baseDir, 'manifest.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
+
+
+def _compute_function_hash(func: Callable) -> str:
+    sourceLines = inspect.getsourcelines(func)
+    functionSource = ''.join(sourceLines[0])
+
+    return _compute_string_hash(functionSource)
+
+
+def _compute_string_hash(string: str) -> str:
+    return hashlib.sha1(string.encode('utf-8')).hexdigest()
