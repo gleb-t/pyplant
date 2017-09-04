@@ -227,7 +227,7 @@ class Plant:
         parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())]
         parameterSignature = hashlib.sha1(''.join(parameterStrings).encode('utf-8')).hexdigest()
 
-        signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature]
+        signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature, ingredientName]
         fullSignature = hashlib.sha1(''.join(signatureParts).encode('utf-8')).hexdigest()
 
         ingredient = self._get_or_create_ingredient(ingredientName)
@@ -341,7 +341,7 @@ class Plant:
                 debugDump += "Missing ingredients: {} \n".format(missingIngredients)
                 print(">>> Plant state dump: \n" + debugDump)
 
-                raise RuntimeError("Could not find a reactor that should run next. Deadlock?")
+                raise RuntimeError("Could not find a reactor that should run next. Reactors not added? Deadlock?")
 
             # We have now figured out which reactor to update next.
             print("Next reactor to run: '{}'".format(nextReactor.name))
@@ -385,9 +385,6 @@ class Plant:
                     # Now that the reactor has finished running, we can compute the signatures for all
                     # the ingredients that it has produced. (Now we now all the inputs and sub-reactors.)
                     for outputName in nextReactor.reactorObject.outputs:
-                        if self._get_ingredient(outputName).isSignatureFresh:
-                            raise RuntimeError("Ingredient was overwritten, this is not supported.")
-
                         signature = self._compute_ingredient_signature(outputName)
                         assert(signature is not None)
                         self.warehouse.sign_fresh_ingredient(outputName, signature)
@@ -633,8 +630,12 @@ class Warehouse:
 
     def store(self, ingredient: Ingredient, value: Any):
         print("Storing ingredient '{}' in the warehouse.".format(ingredient.name))
+
+        if ingredient.name in self.cache:
+            raise RuntimeError("Ingredient is being overwritten, this is not yet supported.")
+
         if ingredient.name in self.manifest:
-            print("Ingredient is already in the warehouse, pruning.")
+            print("Ingredient is already in the warehouse, pruning (not yet implemented).")  #todo
             self._prune(ingredient.name)
 
         if ingredient.type == Ingredient.Type.simple:
