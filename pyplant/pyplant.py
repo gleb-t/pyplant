@@ -702,6 +702,12 @@ class Warehouse:
 
     def _allocate_huge_array(self, name, shape, dtype=np.float):
         dataset = self._fetch_huge_array(name)
+
+        # If the dataset already exists, but has a wrong shape/type, recreate it.
+        if dataset is not None and (dataset.shape != shape or dataset.dtype != dtype):
+            del self.h5File[name]
+            dataset = None
+
         if dataset is None:
             dataset = self.h5File.create_dataset(name, shape=shape, dtype=dtype)
 
