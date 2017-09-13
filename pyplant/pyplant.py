@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import h5py
+import keras.models
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 
@@ -559,7 +560,9 @@ class Ingredient:
         simple = 1,
         list = 2,
         array = 3,
-        huge_array = 4
+        huge_array = 4,
+        object = 5,
+        keras_model = 6
 
     def __init__(self, name: str):
         self.name = name
@@ -620,13 +623,17 @@ class Warehouse:
         if type == Ingredient.Type.simple:
             return self._fetch_simple(name)
         elif type == Ingredient.Type.list:
-            return self._fetch_list(name)
+            return self._fetch_object(name)
         elif type == Ingredient.Type.array:
             return self._fetch_array(name)
         elif type == Ingredient.Type.huge_array:
             return self._fetch_huge_array(name)
-
-        raise RuntimeError("This should never happen! Unsupported ingredient type: {}".format(type))
+        elif type == Ingredient.Type.object:
+            return self._fetch_object(name)
+        elif type == Ingredient.Type.keras_model:
+            return self._fetch_keras_model(name)
+        else:
+            raise RuntimeError("This should never happen! Unsupported ingredient type: {}".format(type))
 
     def store(self, ingredient: Ingredient, value: Any):
         print("Storing ingredient '{}' in the warehouse.".format(ingredient.name))
@@ -641,11 +648,15 @@ class Warehouse:
         if ingredient.type == Ingredient.Type.simple:
             self._store_simple(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.list:
-            self._store_list(ingredient.name, value)
+            self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.array:
             self._store_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.huge_array:
             self._store_huge_array(ingredient.name, value)
+        elif ingredient.type == Ingredient.Type.object:
+            self._store_object(ingredient.name, value)
+        elif ingredient.type == Ingredient.Type.keras_model:
+            self._store_keras_model(ingredient.name, value)
         else:
             raise RuntimeError("Unsupported ingredient type: {}".format(ingredient.type))
 
@@ -683,10 +694,11 @@ class Warehouse:
             return self.h5File.attrs[name]
         return None
 
-    def _store_list(self, name, value):
-        pickle.dump(os.path.join(self.baseDir, '{}.pck'.format(name)), value)
+    def _store_object(self, name, value):
+        with open(os.path.join(self.baseDir, '{}.pck'.format(name)), 'wb') as file:
+            pickle.dump(value, file)
 
-    def _fetch_list(self, name):
+    def _fetch_object(self, name):
         path = os.path.join(self.baseDir, '{}.pck'.format(name))
         if os.path.exists(path):
             with open(path, 'rb') as file:
@@ -722,13 +734,23 @@ class Warehouse:
 
         return None
 
+    def _store_keras_model(self, name, value: keras.models.Model):
+        value.save(os.path.join(self.baseDir, '{}.keras'.format(name)), overwrite=True)
+        pass
+
+    def _fetch_keras_model(self, name):
+        modelPath = os.path.join(self.baseDir, '{}.keras'.format(name))
+        if os.path.exists(modelPath):
+            return keras.models.load_model(modelPath)
+
+        return None
+
     def close(self):
         self.h5File.close()
 
         manifestPath = os.path.join(self.baseDir, 'manifest.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
-
 
 def _compute_function_hash(func: Callable) -> str:
     sourceLines = inspect.getsourcelines(func)
