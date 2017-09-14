@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 import h5py
 import keras.models
+import time
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 
@@ -95,6 +96,8 @@ class Plant:
             self.awaitedIngredient = None  # type: str
             self.subreactorCallStack = []  # type: List[str]
 
+            self.totalRunTime = 0
+
     class IngredientAwaitedCommand:
 
         def __init__(self, ingredientName: str):
@@ -121,8 +124,10 @@ class Plant:
         self.config = {}
 
         stdoutHandler = logging.StreamHandler(sys.stdout)
-        stdoutHandler.setLevel(logLevel or logging.INFO)
+        formatter = logging.Formatter('[%(asctime)s - %(name)s - %(levelname)s] %(message)s')
+        stdoutHandler.setFormatter(formatter)
         self.logger.addHandler(stdoutHandler)
+        self.logger.setLevel(logLevel or logging.INFO)
 
         plantPath = os.path.join(self.plantDir, 'plant.pcl')
         if os.path.exists(plantPath):
@@ -178,8 +183,8 @@ class Plant:
                 self._compute_reactor_signature(name)
 
                 if self.reactors[name].signature != oldSignature:
-                    self.logger.debug("Reactor signature changed to '{}'. Metadata marked as outdated."
-                          .format(self.reactors[name].signature))
+                    self.logger.info("Reactor '{}' signature changed to '{}'. Metadata marked as outdated."
+                                     .format(name, self.reactors[name].signature))
                     self.reactors[name].wasRun = False  # This new version was never executed.
                 else:
                     self.logger.debug("Reactor did not change.")
@@ -190,15 +195,19 @@ class Plant:
     def is_ingredient_known(self, name: str):
         return name in self.ingredients
 
-    def run_reactor(self, reactorFunc: Callable):
-        assert(callable(reactorFunc))
-        assert(reactorFunc.__name__ in self.reactors)  # All reactors must be added to the plant.
+    def run_reactor(self, reactorToRun: Union[Callable, str]):
 
-        reactor = self.reactors[reactorFunc.__name__]
+        if callable(reactorToRun):
+            reactorName = reactorToRun.__name__
+        else:
+            reactorName = reactorToRun
+
+        assert(reactorName in self.reactors)  # All reactors must be added to the plant.
+        reactorObject = self.reactors[reactorToRun.__name__]
 
         assert(len(self.runningReactors) == 0)
         # Schedule the reactor for running.
-        self._start_reactor(reactor)
+        self._start_reactor(reactorObject)
         # Execute.
         self._finish_all_running_reactors()
 
@@ -336,7 +345,7 @@ class Plant:
             # If no reactors are ready to run, look for missing ingredients by scheduling
             # new/modified reactors to run.
             if nextReactor is None:
-                self.logger.debug("Some ingredients are missing. Running new reactors...")
+                self.logger.info("Some ingredients are missing. Running new reactors...")
                 for reactor in self.reactors.values():
                     if not reactor.wasRun and not self._is_reactor_running(reactor.name):
                         nextReactor = self._start_reactor(reactor)
@@ -367,7 +376,9 @@ class Plant:
             missingIngredient = None
             while missingIngredient is None:
                 try:
-                    returnedObject = nextReactor.generator.send(valueToSend)
+                    timeBefore = time.time()
+                    returnedObject = nextReactor.generator.send(valueToSend)  # Execute a step of the reactor
+                    nextReactor.totalRunTime += time.time() - timeBefore  # Track time spend in execution.
                     if type(returnedObject) is Plant.IngredientAwaitedCommand:
                         # A missing ingredient is was requested, will pause the reactor.
                         nextReactor.awaitedIngredient = returnedObject.ingredientName
@@ -375,14 +386,16 @@ class Plant:
                     elif type(returnedObject) is Plant.SubreactorStartedCommand:
                         # A sub-reactor is being launched. Remember the dependency and continue execution.
                         subreactorName = returnedObject.subreactorName
-                        self.logger.debug("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name, subreactorName))
+                        self.logger.info("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name, subreactorName))
                         nextReactor.reactorObject.register_subreactor(subreactorName)
                     else:
                         # A reactor successfully fetched an ingredient, no need to pause, just use it.
                         valueToSend = returnedObject
 
                 except StopIteration:
-                    self.logger.info("Reactor '{}' has finished running.".format(nextReactor.name))
+                    totalRuntimeMin = self.runningReactors[nextReactor.name].totalRunTime / 60.0
+                    self.logger.info("Reactor '{}' has finished running in {:.3} min."
+                                     .format(nextReactor.name, totalRuntimeMin))
                     del self.runningReactors[nextReactor.name]
 
                     # Finished running, update the signature, since now we surely know
@@ -401,10 +414,10 @@ class Plant:
 
             if missingIngredient is not None:
                 # A reactor paused due to a missing ingredient, try to produce it using previous knowledge.
-                self.logger.debug("Will try to produce '{}' for reactor '{}'.".format(missingIngredient, nextReactor.name))
+                self.logger.info("Will try to produce '{}' for reactor '{}'.".format(missingIngredient, nextReactor.name))
                 self._try_produce_ingredient(missingIngredient)
 
-        self.logger.debug("Finished running all reactors.")
+        self.logger.info("Finished running all reactors.")
 
     def _get_producing_reactor(self, ingredientName: str) -> Union['Reactor', None]:
         if ingredientName not in self.ingredients:
