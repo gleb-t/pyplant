@@ -151,6 +151,10 @@ class Plant:
     def shutdown(self):
         self.logger.debug("Shutting down the plant.")
 
+        # Remove attributes that can't be properly saved.
+        for reactor in self.reactors.values():
+            reactor.on_cache_save()
+
         with open(os.path.join(self.plantDir, 'plant.pcl'), 'wb') as file:
             pickle.dump({
                 'reactors': self.reactors,
@@ -203,7 +207,7 @@ class Plant:
             reactorName = reactorToRun
 
         assert(reactorName in self.reactors)  # All reactors must be added to the plant.
-        reactorObject = self.reactors[reactorToRun.__name__]
+        reactorObject = self.reactors[reactorName]
 
         assert(len(self.runningReactors) == 0)
         # Schedule the reactor for running.
@@ -411,6 +415,11 @@ class Plant:
                         self.warehouse.sign_fresh_ingredient(outputName, signature)
 
                     break
+                except Exception as e:
+                    self.logger.critical(("Encountered an exception while executing reactor '{}'. " +
+                                          "Shutting down and re-throwing.").format(nextReactor.name))
+                    self.shutdown()
+                    raise
 
             if missingIngredient is not None:
                 # A reactor paused due to a missing ingredient, try to produce it using previous knowledge.
@@ -570,6 +579,10 @@ class Reactor:
         self.subreactors = set()
 
     def on_cache_load(self):
+        self.func = None
+        self.generator = None
+
+    def on_cache_save(self):
         self.func = None
         self.generator = None
 
