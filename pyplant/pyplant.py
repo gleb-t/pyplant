@@ -309,6 +309,10 @@ class Plant:
         if not reactorObject.wasRun:
             reactorObject.reset_metadata()
 
+        if reactorObject.func is None:
+            self.logger.info("Reactor '{}' was removed or renamed.".format(reactorObject.name))
+            return None
+
         # Each reactor needs a pipework to send and receive data.
         pipework = self._get_or_create_pipework(reactorObject)
 
