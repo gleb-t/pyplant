@@ -122,6 +122,8 @@ class Plant:
         self.warehouse = Warehouse(plantDir, self.logger)
         self.pipeworks = {}
         self.config = {}
+        # Marks which config params are 'auxiliary' and shouldn't affect ingredient signatures.
+        self.configAuxiliaryFlag = {}  # type: Dict[str, bool]
 
         stdoutHandler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter('[%(asctime)s - %(name)s - %(levelname)s] %(message)s')
@@ -245,7 +247,9 @@ class Plant:
         # and reactor's signature (code).
         subingredientSignature = hashlib.sha1(''.join(subingredientSignatures).encode('utf-8')).hexdigest()
 
-        parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())]
+        # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
+        parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())
+                            if name not in self.configAuxiliaryFlag]
         parameterSignature = hashlib.sha1(''.join(parameterStrings).encode('utf-8')).hexdigest()
 
         signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature, ingredientName]
@@ -464,6 +468,12 @@ class Plant:
 
     def set_config(self, configMap):
         self.config = configMap
+
+    def mark_params_as_auxiliary(self, params: List[str]):
+        for name in params:
+            if name not in self.config:
+                raise RuntimeError("Parameter '{}' cannot be found.".format(name))
+            self.configAuxiliaryFlag[name] = True
 
     def get_config_param(self, name: str) -> Any:
         if name in self.config:
@@ -789,6 +799,7 @@ class Warehouse:
         manifestPath = os.path.join(self.baseDir, 'manifest.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
+
 
 def _compute_function_hash(func: Callable) -> str:
     sourceLines = inspect.getsourcelines(func)
