@@ -22,7 +22,7 @@ __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 # Subreactors are effectively 'plugged-in' into reactors, and execute code on their behalf.
 # The purpose of subreactors is to allow reactors to depend on subroutines, such that a change
 # to the code of a subroutine (subreactor) could be detected.
-# If the subroutine is not likely to change (e.g. a library), their is no benefit in using a subreactor.
+# If the subroutine is not likely to change (e.g. a library), there is no benefit in using a subreactor.
 #
 
 def ReactorFunc(func):
@@ -118,6 +118,7 @@ class Plant:
         self.reactors = {}  # type: Dict[str, Reactor]
         self.subreactors = {}  # type: Dict[str, Subreactor]
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
+        self.executionHistory = []  # type: List[str]
         self.ingredients = {}  # type: Dict[str, Ingredient]
         self.warehouse = Warehouse(plantDir, self.logger)
         self.pipeworks = {}
@@ -213,6 +214,15 @@ class Plant:
         reactorObject = self.reactors[reactorName]
 
         assert(len(self.runningReactors) == 0)
+
+        # The reactor might have already been executed during this session,
+        # for example when running unknown/modified reactors to produce
+        # a missing ingredient.
+        if reactorName in self.executionHistory:
+            self.logger.info("Ignoring the command to start reactor '{}', since it was already run in this session."
+                             .format(reactorName))
+            return
+
         # Schedule the reactor for running.
         self._start_reactor(reactorObject)
         # Execute.
@@ -420,7 +430,7 @@ class Plant:
                     nextReactor.reactorObject.wasRun = True
 
                     # Now that the reactor has finished running, we can compute the signatures for all
-                    # the ingredients that it has produced. (Now we now all the inputs and sub-reactors.)
+                    # the ingredients that it has produced. (Now we know all the inputs and sub-reactors.)
                     for outputName in nextReactor.reactorObject.outputs:
                         signature = self._compute_ingredient_signature(outputName)
                         assert(signature is not None)
@@ -545,7 +555,7 @@ class Reactor:
     def __init__(self, name: str, func: Callable[[Pipework], None]):
 
         # Whether the current reactor version was executed in the past.
-        # If it was, we now that we can trust the metadata (inputs, outputs).
+        # If it was, we know that we can trust the metadata (inputs, outputs, etc.).
         # Subreactors don't have this flag, since they don't have the metadata,
         # they don't produce ingredients, it's all attributed to the parent reactor.
         self.wasRun = False
