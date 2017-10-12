@@ -125,6 +125,7 @@ class Plant:
         # Marks which config params are 'auxiliary' and shouldn't affect ingredient signatures.
         self.configAuxiliaryFlag = {}  # type: Dict[str, bool]
 
+        self.logger.handlers = []  # In case the logger already exists.
         stdoutHandler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter('[%(asctime)s - %(name)s - %(levelname)s] %(message)s')
         stdoutHandler.setFormatter(formatter)
@@ -217,6 +218,9 @@ class Plant:
         # Execute.
         self._finish_all_running_reactors()
 
+    def fetch_ingredient(self, name: str):
+        return self.warehouse.fetch(name)
+
     def _compute_ingredient_signature(self, ingredientName):
         self.logger.debug("Computing signature for ingredient '{}'.".format(ingredientName))
         ingredient = self._get_ingredient(ingredientName)
@@ -229,7 +233,7 @@ class Plant:
         # If we don't know the producing reactor, or it has changed and wasn't run yet,
         # we cannot compute the signature.
         if reactor is None or not reactor.wasRun:
-            self.logger.debug("Producing reactor is unknown, signature is unknown.")
+            self.logger.debug("Producing reactor is unknown or was never run in its current form, signature is unknown.")
             return None
 
         self.logger.debug("Collecting sub-ingredient signatures...")
