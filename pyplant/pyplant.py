@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import h5py
-import keras.models
 import time
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
@@ -24,6 +23,16 @@ __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 # to the code of a subroutine (subreactor) could be detected.
 # If the subroutine is not likely to change (e.g. a library), there is no benefit in using a subreactor.
 #
+
+def _compute_function_hash(func: Callable) -> str:
+    sourceLines = inspect.getsourcelines(func)
+    functionSource = ''.join(sourceLines[0])
+
+    return _compute_string_hash(functionSource)
+
+
+def _compute_string_hash(string: str) -> str:
+    return hashlib.sha1(string.encode('utf-8')).hexdigest()
 
 def ReactorFunc(func):
     assert('pyplant' not in func.__dict__)
@@ -82,6 +91,10 @@ def SubreactorFunc(func):
 
 class Plant:
 
+    class EventType(Enum):
+        unknown = 0,
+        reactor_started = 1
+
     # Global store of current sub-reactor source hashes.
     # Filled out during code importing through function augmentors.
     SubreactorSourceHashes = {}  # type: Dict[str, str]
@@ -108,7 +121,17 @@ class Plant:
         def __init__(self, subreactorName: Callable):
             self.subreactorName = subreactorName
 
-    def __init__(self, plantDir: str, logger: logging.Logger=None, logLevel: int=None):
+    def __init__(self, plantDir: str, logger: logging.Logger=None, logLevel: int=None,
+                 functionHash: Callable[[Callable], str]=_compute_function_hash,
+                 stringHash: Callable[[str], str]=_compute_string_hash):
+        """
+
+        :param plantDir:
+        :param logger:
+        :param logLevel:
+        :param functionHash: A Callable that will be used for computing function hashes.
+        :param stringHash:  A Callable that will be used for computing string hashes.
+        """
 
         if not os.path.exists(plantDir):
             os.makedirs(plantDir)
@@ -116,7 +139,7 @@ class Plant:
         self.plantDir = plantDir
         self.logger = logger or logging.getLogger('pyplant')
         self.reactors = {}  # type: Dict[str, Reactor]
-        self.subreactors = {}  # type: Dict[str, Subreactor]
+        self.subreactors = {}  # type: Dict[str, Subreactor]  # todo unused, remove (after adding tests)
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
         self.executionHistory = []  # type: List[str]
         self.ingredients = {}  # type: Dict[str, Ingredient]
@@ -132,6 +155,8 @@ class Plant:
         stdoutHandler.setFormatter(formatter)
         self.logger.addHandler(stdoutHandler)
         self.logger.setLevel(logLevel or logging.INFO)
+
+        self.eventListeners = {}  # type: Dict[Plant.EventType, List[Callable[[Plant.EventType, Any], None]]]
 
         plantPath = os.path.join(self.plantDir, 'plant.pcl')
         if os.path.exists(plantPath):
@@ -230,6 +255,22 @@ class Plant:
 
     def fetch_ingredient(self, name: str):
         return self.warehouse.fetch(name)
+
+    def add_event_listener(self, eventType: 'Plant.EventType', callback: Callable):
+        if eventType not in self.eventListeners:
+            self.eventListeners[eventType] = []
+
+        self.eventListeners[eventType].append(callback)
+
+    def remove_event_listener(self, callback: Callable[['Plant.EventType', Any], None]):
+        for k, listenerList in self.eventListeners:
+            if callback in listenerList:
+                listenerList.remove(callback)
+
+    def _trigger_event(self, eventType: 'Plant.EventType', args: Any):
+        if eventType in self.eventListeners:
+            for callback in self.eventListeners[eventType]:
+                callback(eventType, *args)
 
     def _compute_ingredient_signature(self, ingredientName):
         self.logger.debug("Computing signature for ingredient '{}'.".format(ingredientName))
@@ -345,6 +386,8 @@ class Plant:
 
         # Save the generator object for further execution.
         runningReactor.generator = generator
+
+        self._trigger_event(Plant.EventType.reactor_started, (reactorObject.name, reactorObject.func))
 
         return runningReactor
 
@@ -796,11 +839,14 @@ class Warehouse:
 
         return None
 
-    def _store_keras_model(self, name, value: keras.models.Model):
+    def _store_keras_model(self, name, value):
+
         value.save(os.path.join(self.baseDir, '{}.keras'.format(name)), overwrite=True)
         pass
 
     def _fetch_keras_model(self, name):
+        import keras.models
+
         modelPath = os.path.join(self.baseDir, '{}.keras'.format(name))
         if os.path.exists(modelPath):
             return keras.models.load_model(modelPath)
@@ -813,14 +859,3 @@ class Warehouse:
         manifestPath = os.path.join(self.baseDir, 'manifest.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
-
-
-def _compute_function_hash(func: Callable) -> str:
-    sourceLines = inspect.getsourcelines(func)
-    functionSource = ''.join(sourceLines[0])
-
-    return _compute_string_hash(functionSource)
-
-
-def _compute_string_hash(string: str) -> str:
-    return hashlib.sha1(string.encode('utf-8')).hexdigest()
