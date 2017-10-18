@@ -34,6 +34,7 @@ def _compute_function_hash(func: Callable) -> str:
 def _compute_string_hash(string: str) -> str:
     return hashlib.sha1(string.encode('utf-8')).hexdigest()
 
+
 def ReactorFunc(func):
     assert('pyplant' not in func.__dict__)
 
@@ -148,6 +149,9 @@ class Plant:
         self.config = {}
         # Marks which config params are 'auxiliary' and shouldn't affect ingredient signatures.
         self.configAuxiliaryFlag = {}  # type: Dict[str, bool]
+
+        self.functionHash = functionHash
+        self.stringHash = stringHash
 
         self.logger.handlers = []  # In case the logger already exists.
         stdoutHandler = logging.StreamHandler(sys.stdout)
@@ -300,15 +304,15 @@ class Plant:
 
         # Compute the signature as a hash of subingredients' signatures, config parameters
         # and reactor's signature (code).
-        subingredientSignature = hashlib.sha1(''.join(subingredientSignatures).encode('utf-8')).hexdigest()
+        subingredientSignature = self.stringHash(''.join(subingredientSignatures))
 
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
         parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())
                             if name not in self.configAuxiliaryFlag]
-        parameterSignature = hashlib.sha1(''.join(parameterStrings).encode('utf-8')).hexdigest()
+        parameterSignature = self.stringHash(''.join(parameterStrings))
 
         signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature, ingredientName]
-        fullSignature = hashlib.sha1(''.join(signatureParts).encode('utf-8')).hexdigest()
+        fullSignature = self.stringHash(''.join(signatureParts))
 
         ingredient = self._get_or_create_ingredient(ingredientName)
         ingredient.set_current_signature(fullSignature)
@@ -378,6 +382,7 @@ class Plant:
         # Schedule execution.
         runningReactor = Plant.RunningReactor(reactorObject.name, reactorObject)
         self.runningReactors[reactorObject.name] = runningReactor
+        self.executionHistory.append(reactorObject.name)
 
         # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
         generator = reactorObject.func(pipework)
