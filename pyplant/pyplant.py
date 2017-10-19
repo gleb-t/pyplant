@@ -486,8 +486,8 @@ class Plant:
 
                     break
                 except Exception as e:
-                    self.logger.critical("Encountered an exception while executing reactor '{}'."
-                                         .format(nextReactor.name))
+                    self.logger.critical("Encountered an exception while executing reactor '{}': {}"
+                                         .format(nextReactor.name, e))
                     raise
 
             if missingIngredient is not None:
