@@ -70,6 +70,58 @@ class PyPlantTest(unittest.TestCase):
     def _shutdown_plant(self):
         self.plant.shutdown()
 
+    def test_events(self):
+        # We rely on events working to perform other tests.
+        # Here we check whether the events themselves work correctly
+        # by manually tracking which reactors start execution.
+        actuallyStartedReactors, actuallyStartedSubreactors = [], []
+
+        @SubreactorFunc
+        def subreactor_a(pipe: Pipework):
+            actuallyStartedSubreactors.append('subreactor_a')
+            a = 3 + 10  # Do stuff.
+            yield
+
+        @SubreactorFunc
+        def subreactor_b(pipe: Pipework):
+            actuallyStartedSubreactors.append('subreactor_b')
+            yield from subreactor_a(pipe)
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            actuallyStartedReactors.append('reactor_a')
+            yield from subreactor_b(pipe)
+            pipe.send('a-to-b', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            actuallyStartedReactors.append('reactor_b')
+            aToB = yield pipe.receive('a-to-b')
+            yield from subreactor_a(pipe)
+            yield
+
+        @ReactorFunc
+        def reactor_c(pipe: Pipework):
+            actuallyStartedReactors.append('reactor_c')
+            yield from subreactor_a(pipe)
+
+        self._construct_plant({}, [reactor_a, reactor_b, reactor_c])
+        self.plant.run_reactor('reactor_b')
+
+        # Note, that we don't care about the concrete execution order here,
+        # we just care that it's the same as the event system reports it to be.
+        self.assertEqual(self.startedReactors, actuallyStartedReactors)
+        self.assertEqual(self.startedSubreactors, actuallyStartedSubreactors)
+
+        # Now test with reactor C.
+        self._reconstruct_plant({})
+        actuallyStartedReactors, actuallyStartedSubreactors = [], []
+        self.plant.run_reactor('reactor_c')
+
+        self.assertEqual(self.startedReactors, actuallyStartedReactors)
+        self.assertEqual(self.startedSubreactors, actuallyStartedSubreactors)
+
     def test_slice_as_config_param(self):
         config = {'slice-param': slice(0, 10, None)}
 
@@ -248,4 +300,3 @@ class PyPlantTest(unittest.TestCase):
 
         self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_mid'])
         self.assertEqual(self.startedSubreactors, ['subreactor_b'])
-
