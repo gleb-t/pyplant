@@ -4,7 +4,7 @@ import pickle
 import inspect
 import hashlib
 import logging
-from typing import Callable, Any, Dict, Generator, Union, List
+from typing import Callable, Any, Dict, Generator, Union, List, Tuple
 from enum import Enum
 from types import SimpleNamespace
 
@@ -76,8 +76,7 @@ def SubreactorFunc(func):
         raise RuntimeError("SubreactorFunc '{}' is not a generator function!".format(name))
 
     # Store the current source hash globally. Will be needed for reactor signature computation.
-    hashString = _compute_function_hash(func)
-    Plant.SubreactorSourceHashes[name] = hashString
+    Plant._SubreactorFunctions[name] = func
 
     def _pyplant_subreactor_wrapper(*args, **kwargs):
         # Notify the plant, that a subreactor is being called.
@@ -94,11 +93,12 @@ class Plant:
 
     class EventType(Enum):
         unknown = 0,
-        reactor_started = 1
+        reactor_started = 1,
+        subreactor_started = 2,
 
     # Global store of current sub-reactor source hashes.
     # Filled out during code importing through function augmentors.
-    SubreactorSourceHashes = {}  # type: Dict[str, str]
+    _SubreactorFunctions = {}  # type: Dict[str, str]
 
     class RunningReactor:
 
@@ -119,7 +119,7 @@ class Plant:
 
     class SubreactorStartedCommand:
 
-        def __init__(self, subreactorName: Callable):
+        def __init__(self, subreactorName: str):
             self.subreactorName = subreactorName
 
     def __init__(self, plantDir: str, logger: logging.Logger=None, logLevel: int=None,
@@ -229,6 +229,9 @@ class Plant:
             else:
                 self.reactors[name] = Reactor(name, func)
 
+    def get_reactors(self):
+        return [r.func for n, r in self.reactors.items()]
+
     def is_ingredient_known(self, name: str):
         return name in self.ingredients
 
@@ -271,7 +274,7 @@ class Plant:
             if callback in listenerList:
                 listenerList.remove(callback)
 
-    def _trigger_event(self, eventType: 'Plant.EventType', args: Any):
+    def _trigger_event(self, eventType: 'Plant.EventType', args: Tuple):
         if eventType in self.eventListeners:
             for callback in self.eventListeners[eventType]:
                 callback(eventType, *args)
@@ -325,19 +328,24 @@ class Plant:
         Computes and *updates* the signature of a reactor and
         all its referenced subreactors.
 
+        Computing the signature before running the reactor is valid because we have the metadata
+        from the previous runs, e.g. which subreactors are being called. If the reactor has changed,
+        and dependencies were added/removed, then its source code must have changed too,
+        changing the signature. Thus, we can rely on the metadata, as long as the source code is unchanged.
+
         :param reactorName:
         :return:
         """
         assert(reactorName in self.reactors)  # Must be added already.
 
         reactor = self.reactors[reactorName]
-        reactorBodyHash = _compute_function_hash(reactor.func)
+        reactorBodyHash = self.functionHash(reactor.func)
 
         nestedHashes = []
         for subreactorName in sorted(reactor.subreactors):
             # When a subreactor is imported, its hash must be stored in a static dict.
-            if subreactorName in Plant.SubreactorSourceHashes:
-                subreactorBodyHash = Plant.SubreactorSourceHashes[subreactorName]
+            if subreactorName in Plant._SubreactorFunctions:
+                subreactorBodyHash = self.functionHash(Plant._SubreactorFunctions[subreactorName])
                 nestedHashes.append(subreactorBodyHash)
             else:
                 # If it's not there - subreactor was deleted, provide gibberish to change the signature,
@@ -462,6 +470,7 @@ class Plant:
                         subreactorName = returnedObject.subreactorName
                         self.logger.info("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name, subreactorName))
                         nextReactor.reactorObject.register_subreactor(subreactorName)
+                        self._trigger_event(Plant.EventType.subreactor_started, (subreactorName,))
                     else:
                         # A reactor successfully fetched an ingredient, no need to pause, just use it.
                         valueToSend = returnedObject
@@ -822,7 +831,7 @@ class Warehouse:
     def _fetch_array(self, name):
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)), allow_pickle=False)
 
-    def _allocate_huge_array(self, name, shape, dtype=np.float):
+    def _allocate_huge_array(self, name, shape, dtype=np.float, **kwargs):
         dataset = self._fetch_huge_array(name)
 
         # If the dataset already exists, but has a wrong shape/type, recreate it.
@@ -831,12 +840,15 @@ class Warehouse:
             dataset = None
 
         if dataset is None:
-            dataset = self.h5File.create_dataset(name, shape=shape, dtype=dtype)
+            dataset = self.h5File.create_dataset(name, shape=shape, dtype=dtype, **kwargs)
 
         return dataset
 
     def _store_huge_array(self, name, value: h5py.Dataset):
-        pass  # H5py takes care of storing to disk on-the-fly.
+        # H5py takes care of storing to disk on-the-fly.
+        # Just flush the data, to make sure that it is persisted.
+        self.h5File.flush()
+        pass
 
     def _fetch_huge_array(self, name):
         if name in self.h5File:

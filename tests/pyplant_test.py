@@ -23,6 +23,7 @@ class PyPlantTest(unittest.TestCase):
 
         self.plantDir = tempfile.mkdtemp()
         self.startedReactors = []
+        self.startedSubreactors = []
         self.modifiedReactors = []
 
     def tearDown(self):
@@ -39,7 +40,38 @@ class PyPlantTest(unittest.TestCase):
 
         return name
 
-    def _construct_plant(self, config):
+    def _construct_plant(self, config, reactors=None):
+
+        def _on_reactor_started(eventType, reactorName, reactorFunc=None):
+            if eventType == Plant.EventType.reactor_started:
+                self.startedReactors.append(reactorName)
+            elif eventType == Plant.EventType.subreactor_started:
+                self.startedSubreactors.append(reactorName)
+
+        self.plant = Plant(self.plantDir, functionHash=self._compute_function_hash)
+        self.plant.__enter__()
+        self.plant.add_event_listener(Plant.EventType.reactor_started, _on_reactor_started)
+        self.plant.add_event_listener(Plant.EventType.subreactor_started, _on_reactor_started)
+        self.plant.set_config(config)
+        if reactors is not None:
+            self.plant.add_reactors(*tuple(reactors))
+
+        return self.plant
+
+    def _reconstruct_plant(self, config):
+        reactors = self.plant.get_reactors()
+        self._shutdown_plant()
+        self.startedReactors = []
+        self.startedSubreactors = []
+
+        self._construct_plant(config)
+        self.plant.add_reactors(*tuple(reactors))
+
+    def _shutdown_plant(self):
+        self.plant.shutdown()
+
+    def test_slice_as_config_param(self):
+        config = {'slice-param': slice(0, 10, None)}
 
         @ReactorFunc
         def reactor_a(pipe: Pipework):
@@ -54,31 +86,8 @@ class PyPlantTest(unittest.TestCase):
 
             yield
 
-        def _on_reactor_started(eventType, reactorName, reactorFunc):
-            self.startedReactors.append(reactorName)
-
-        self.plant = Plant(self.plantDir, functionHash=self._compute_function_hash)
-        self.plant.__enter__()
-        self.plant.add_event_listener(Plant.EventType.reactor_started, _on_reactor_started)
-        self.plant.set_config(config)
-        self.plant.add_reactors(reactor_a, reactor_b)
-
-        return self.plant
-
-    def _reconstruct_plant(self, config):
-        self._shutdown_plant()
-        self.startedReactors = []
-
-        self._construct_plant(config)
-
-    def _shutdown_plant(self):
-        self.plant.shutdown()
-
-    def test_slice_as_config_param(self):
-        config = {'slice-param': slice(0, 10, None)}
-
         # First pass.
-        self._construct_plant(config)
+        self._construct_plant(config, [reactor_a, reactor_b])
         self.plant.run_reactor('reactor_b')
 
         self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_a'])
@@ -95,4 +104,148 @@ class PyPlantTest(unittest.TestCase):
         self.plant.run_reactor('reactor_b')
         self.assertEqual(self.startedReactors, ['reactor_b'])
 
+    def test_subreactors_basic(self):
+        config = {'param-a': 1, 'param-b': 2}
+
+        @SubreactorFunc
+        def subreactor_a(pipe: Pipework):
+            a = 3 + 10  # Do stuff.
+            yield
+
+        @SubreactorFunc
+        def subreactor_b(pipe: Pipework):
+            b = 3 + 10  # Do stuff.
+            yield
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            paramA = pipe.read_config('param-a')
+            yield from subreactor_a(pipe)
+            yield from subreactor_b(pipe)
+            pipe.send('a-to-b', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            aToB = yield pipe.receive('a-to-b')
+            yield from subreactor_b(pipe)
+            yield
+
+        # First pass, everything is executed.
+        self._construct_plant(config, [reactor_a, reactor_b])
+        self.plant.run_reactor('reactor_b')
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_a', 'subreactor_b', 'subreactor_b'])
+
+        # Reactor A should be cached, subreactor B should still be called.
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_b'])
+
+        # Changing a subreactor should cause reactor re-execution.
+        self.modifiedReactors.append('subreactor_a')
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_a'])
+        self.assertEqual(self.startedSubreactors, ['subreactor_a', 'subreactor_b', 'subreactor_b'])
+
+    def test_subreactors_nested(self):
+
+        config = {'param-a': 1, 'param-b': 2}
+
+        @SubreactorFunc
+        def subreactor_a(pipe: Pipework):
+            a = 3 + 10  # Do stuff.
+            yield
+
+        @SubreactorFunc
+        def subreactor_b(pipe: Pipework):
+            yield from subreactor_a(pipe)
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            yield from subreactor_b(pipe)
+            pipe.send('a-to-b', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            aToB = yield pipe.receive('a-to-b')
+            yield from subreactor_a(pipe)
+            yield
+
+        # First pass, everything is executed.
+        self._construct_plant(config, [reactor_a, reactor_b])
+        self.plant.run_reactor('reactor_b')
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_b', 'subreactor_a', 'subreactor_a'])
+
+        # Invalidating the nested subreactor should cause re-execution.
+        self.modifiedReactors.append('subreactor_a')
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_b', 'subreactor_a', 'subreactor_a'])
+
+    def test_subreactors_input_dependencies(self):
+        config = {'param-a': 1, 'param-b': 2}
+
+        @SubreactorFunc
+        def subreactor_a(pipe: Pipework):
+            a = 3 + 10  # Do stuff.
+            pipe.read_config('param-a')
+            yield
+
+        @SubreactorFunc
+        def subreactor_b(pipe: Pipework):
+            midToB = yield pipe.receive('mid-to-b')
+            yield pipe.receive('a-to-b')
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            yield from subreactor_a(pipe)
+            pipe.send('a-to-b', 1, Ingredient.Type.simple)
+            pipe.send('a-to-mid', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_mid(pipe: Pipework):
+            aToMid = yield pipe.receive('a-to-mid')
+            pipe.send('mid-to-b', 5, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            yield from subreactor_b(pipe)
+
+        # First pass, everything is executed, reactor B depends on A through a subreactor.
+        self._construct_plant(config, [reactor_a, reactor_mid, reactor_b])
+        self.plant.run_reactor('reactor_b')
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_b', 'subreactor_a'])
+
+        # Results are cached.
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b'])
+        self.assertEqual(self.startedSubreactors, ['subreactor_b'])
+
+        # Modifying a parameter used by a subreactor causes re-execution.
+        config['param-a'] = 99
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_mid', 'reactor_a'])
+        self.assertEqual(self.startedSubreactors, ['subreactor_b', 'subreactor_a'])
+
+        # Modifying a dependency of a subreactor, causes its re-execution.
+        self.modifiedReactors.append('reactor_mid')
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_mid'])
+        self.assertEqual(self.startedSubreactors, ['subreactor_b'])
 
