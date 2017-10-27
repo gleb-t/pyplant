@@ -704,15 +704,23 @@ class Warehouse:
     def __init__(self, baseDir, logger: logging.Logger):
         self.baseDir = baseDir
         self.cache = {}
+        self.simpleStore = {}
         self.h5File = h5py.File(os.path.join(self.baseDir, 'warehouse.h5py'), mode='a')
         self.logger = logger
 
-        manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pcl'))
+        manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
         if os.path.exists(manifestPath):
             with open(manifestPath, 'rb') as file:
                 self.manifest = pickle.load(file)
         else:
             self.manifest = {}
+
+        simpleStorePath = os.path.join(os.path.join(self.baseDir, 'simple.pyplant.pcl'))
+        if os.path.exists(simpleStorePath):
+            with open(simpleStorePath, 'rb') as file:
+                self.simpleStore = pickle.load(file)
+        else:
+            self.simpleStore = {}
 
     def fetch(self, name: str, signature: str = None) -> Any:
         """
@@ -783,6 +791,7 @@ class Warehouse:
             'signature': ingredient.signature,
             'type': ingredient.type
         }
+        self._save_manifest()
 
         self.cache[ingredient.name] = value
 
@@ -806,19 +815,22 @@ class Warehouse:
         pass
 
     def _store_simple(self, name, value):
-        self.h5File.attrs[name] = value
+        self.simpleStore[name] = value
+        with open(os.path.join(self.baseDir, 'simple.pyplant.pcl'), 'wb') as file:
+            pickle.dump(self.simpleStore, file)
 
     def _fetch_simple(self, name):
-        if name in self.h5File.attrs:
-            return self.h5File.attrs[name]
+        # The whole store is loaded on start, no need to check the disk.
+        if name in self.simpleStore:
+            return self.simpleStore[name]
         return None
 
     def _store_object(self, name, value):
-        with open(os.path.join(self.baseDir, '{}.pck'.format(name)), 'wb') as file:
+        with open(os.path.join(self.baseDir, '{}.pcl'.format(name)), 'wb') as file:
             pickle.dump(value, file)
 
     def _fetch_object(self, name):
-        path = os.path.join(self.baseDir, '{}.pck'.format(name))
+        path = os.path.join(self.baseDir, '{}.pcl'.format(name))
         if os.path.exists(path):
             with open(path, 'rb') as file:
                 return pickle.load(file)
@@ -870,9 +882,11 @@ class Warehouse:
 
         return None
 
-    def close(self):
-        self.h5File.close()
-
-        manifestPath = os.path.join(self.baseDir, 'manifest.pcl')
+    def _save_manifest(self):
+        manifestPath = os.path.join(self.baseDir, 'manifest.pyplant.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
+
+    def close(self):
+        self.h5File.close()
+        self._save_manifest()

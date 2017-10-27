@@ -156,6 +156,56 @@ class PyPlantTest(unittest.TestCase):
         self.plant.run_reactor('reactor_b')
         self.assertEqual(self.startedReactors, ['reactor_b'])
 
+    def test_simple_ingredients(self):
+
+        ingredients = {
+            'int': 42,
+            'float': 19.84,
+            'bool': False,
+            'string': 'Ex machina',
+            'list': [4, 8, 15, 16, 23, 42],
+            'tuple': (1, 2, 4, 1),
+            'dict': {'caesar': 'caesar\'s', 'lord': 'lord\'s'}
+        }
+
+        received = None
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            for name, value in ingredients.items():
+                pipe.send(name, value, Ingredient.Type.simple)
+
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+            nonlocal received
+            received = {}
+
+            for name in ingredients:
+                value = yield pipe.receive(name)
+                received[name] = value
+
+            yield
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        self.assertDictEqual(ingredients, received)
+        for name, trueVal in ingredients.items():
+            self.assertEqual(trueVal, received[name])
+            self.assertEqual(type(trueVal), type(received[name]))
+
+        received = None
+        self._reconstruct_plant({})
+        self.plant.run_reactor(consumer)
+
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+        self.assertDictEqual(ingredients, received)
+        for name, trueVal in ingredients.items():
+            self.assertEqual(trueVal, received[name])
+            self.assertEqual(type(trueVal), type(received[name]))
+
     def test_subreactors_basic(self):
         config = {'param-a': 1, 'param-b': 2}
 
