@@ -805,7 +805,7 @@ class Warehouse:
     def sign_fresh_ingredient(self, ingredientName: str, signature: str):
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
         assert(signature is not None)
-        assert(ingredientName in self.manifest)
+        assert(ingredientName in self.manifest)  # Did you forget to send an allocated array?
         assert(ingredientName in self.cache)  # Must be fresh, i.e. must be in cache.
 
         # Store the new signature.

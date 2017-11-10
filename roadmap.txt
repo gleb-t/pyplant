@@ -1,0 +1,7 @@
+[] Long-term multi-run storage that keeps multiple versions of ingredients.
+   This would help to reduce the execution time of repeated experiments.
+[] Complain about allocated huge arrays that haven't been sent out.
+[] Allow allocation of temporary hue arrays.
+[] Improve manifest/warehouse resilience to crashes (e.g. resizable dataset can mess things up).
+[] Auto-add all reactors (a separate function, maybe?)
+[] Clear the cache/manifest if the PyPlant's version has changed.
