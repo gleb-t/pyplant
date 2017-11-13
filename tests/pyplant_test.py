@@ -350,3 +350,52 @@ class PyPlantTest(unittest.TestCase):
 
         self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_mid'])
         self.assertEqual(self.startedSubreactors, ['subreactor_b'])
+
+    def test_state_saved_on_crash(self):
+        """
+        Test that when a crash occurs, we are saving the results of all the previously executed reactors.
+        This feature helps to avoid re-running data loading stuff when new fancy functionality
+        crashes late in the pipeline.
+
+        :return:
+        """
+        config = {
+            'param-a': 5,
+            'param-b': 1
+        }
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            a = 3 + 10
+            pipe.read_config('param-a')
+
+            pipe.send('simple', 5, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            a = 3 + 10
+            simple = yield pipe.receive('simple')
+            b = pipe.read_config('param-b')
+            if b == 1:
+                raise RuntimeError('Intentional crash.')
+
+            yield
+
+        self._construct_plant(config, [reactor_a, reactor_b])
+        with self.assertRaises(RuntimeError):
+            self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_a'])
+
+        # Terminate the current plant without saving, then recreate it.
+        # self._reconstruct_plant(config)  <-- This would be a graceful termination.
+        self.startedReactors = []
+        self.plant.warehouse.close()
+        self._construct_plant(config)
+        self.plant.add_reactors(reactor_a, reactor_b)
+
+        with self.assertRaises(RuntimeError):
+            self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b'])  # No need to rerun reactor_a.

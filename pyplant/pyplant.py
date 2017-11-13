@@ -169,12 +169,6 @@ class Plant:
                 self.reactors = plantCache['reactors']
                 self.ingredients = plantCache['ingredients']
 
-            for ingredient in self.ingredients.values():
-                ingredient.on_cache_load()
-
-            for reactor in self.reactors.values():
-                reactor.on_cache_load()
-
     def __enter__(self):
         return self
 
@@ -184,17 +178,15 @@ class Plant:
     def shutdown(self):
         self.logger.debug("Shutting down the plant.")
 
-        # Remove attributes that can't be properly saved.
-        for reactor in self.reactors.values():
-            reactor.on_cache_save()
+        self._save_cache()
+        self.warehouse.close()
 
+    def _save_cache(self):
         with open(os.path.join(self.plantDir, 'plant.pcl'), 'wb') as file:
             pickle.dump({
                 'reactors': self.reactors,
                 'ingredients': self.ingredients
             }, file)
-
-        self.warehouse.close()
 
     def add_reactors(self, *args):
         for func in args:
@@ -493,10 +485,16 @@ class Plant:
                         assert(signature is not None)
                         self.warehouse.sign_fresh_ingredient(outputName, signature)
 
+                    # Save the current cache, so the results of this reactor
+                    # are safe from the potential future crashes of reactors that follow.
+                    self._save_cache()
+
                     break
                 except Exception as e:
                     self.logger.critical("Encountered an exception while executing reactor '{}': {}"
                                          .format(nextReactor.name, e))
+                    del self.runningReactors[nextReactor.name]
+
                     raise
 
             if missingIngredient is not None:
@@ -662,13 +660,28 @@ class Reactor:
         self.params = set()
         self.subreactors = set()
 
-    def on_cache_load(self):
+    def __setstate__(self, state):
+        """
+        When unpickling (loading from disk) make sure we're not loading
+        any old runtime-dependent attributes.
+        :param state:
+        :return:
+        """
+        self.__dict__.update(state)
+
         self.func = None
         self.generator = None
 
-    def on_cache_save(self):
-        self.func = None
-        self.generator = None
+    def __getstate__(self):
+        """
+        When pickling (saving Plant state to disk) ignore the runtime-dependent attributes.
+        :return:
+        """
+        d = self.__dict__.copy()
+        del d['func']
+        del d['generator']
+
+        return d
 
 
 class Ingredient:
@@ -694,9 +707,17 @@ class Ingredient:
         self.signature = signature
         self.isSignatureFresh = True
 
-    def on_cache_load(self):
+    def __setstate__(self, state):
+        """
+        When unpickling, reset the freshness flags.
+        They are only valid during a single session, and the plant is being loaded from disk (new session).
+        :param state:
+        :return:
+        """
+        self.__dict__.update(state)
         self.isSignatureFresh = False
         self.isFresh = False
+
 
 
 class Warehouse:
