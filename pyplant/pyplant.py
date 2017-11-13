@@ -407,34 +407,7 @@ class Plant:
 
         # Main loop over the running reactors.
         while len(self.runningReactors) != 0:
-            nextReactor = None  # type: Plant.RunningReactor
-            # Check if we have a paused reactor waiting for an ingredient that was just produced,
-            # or a reactor without any dependencies (just scheduled).
-            for runningReactor in self.runningReactors.values():
-                awaitedIngredient = runningReactor.awaitedIngredient
-                if awaitedIngredient is None or self._is_ingredient_fresh(awaitedIngredient):
-                    nextReactor = runningReactor
-                    break
-
-            # If no reactors are ready to run, look for missing ingredients by scheduling
-            # new/modified reactors to run.
-            if nextReactor is None:
-                self.logger.info("Some ingredients are missing. Running new reactors...")
-                for reactor in self.reactors.values():
-                    if not reactor.wasRun and not self._is_reactor_running(reactor.name):
-                        nextReactor = self._start_reactor(reactor)
-                        break
-
-            if nextReactor is None:
-                debugDump = "Running reactors: {} \n".format(self.runningReactors.keys())
-                missingIngredients = [r.awaitedIngredient for r in self.runningReactors.values()
-                                      if r.awaitedIngredient is not None]
-                debugDump += "Missing ingredients: {} \n".format(missingIngredients)
-                self.logger.debug(">>> Plant state dump: \n" + debugDump)
-
-                raise RuntimeError("Could not find a reactor that should run next. Reactors not added? Deadlock?")
-
-            # We have now figured out which reactor to update next.
+            nextReactor = self._get_next_reactor_to_update()
             self.logger.info("Next reactor to run: '{}'".format(nextReactor.name))
 
             valueToSend = None
@@ -471,24 +444,8 @@ class Plant:
                     totalRuntimeMin = self.runningReactors[nextReactor.name].totalRunTime / 60.0
                     self.logger.info("Reactor '{}' has finished running in {:.3} min."
                                      .format(nextReactor.name, totalRuntimeMin))
-                    del self.runningReactors[nextReactor.name]
 
-                    # Finished running, update the signature, since now we surely know
-                    # all the referenced subreactors.
-                    self._compute_reactor_signature(nextReactor.name)
-                    nextReactor.reactorObject.wasRun = True
-
-                    # Now that the reactor has finished running, we can compute the signatures for all
-                    # the ingredients that it has produced. (Now we know all the inputs and sub-reactors.)
-                    for outputName in nextReactor.reactorObject.outputs:
-                        signature = self._compute_ingredient_signature(outputName)
-                        assert(signature is not None)
-                        self.warehouse.sign_fresh_ingredient(outputName, signature)
-
-                    # Save the current cache, so the results of this reactor
-                    # are safe from the potential future crashes of reactors that follow.
-                    self._save_cache()
-
+                    self._handle_reactor_finished(nextReactor)
                     break
                 except Exception as e:
                     self.logger.critical("Encountered an exception while executing reactor '{}': {}"
@@ -503,6 +460,69 @@ class Plant:
                 self._try_produce_ingredient(missingIngredient)
 
         self.logger.info("Finished running all reactors.")
+
+    def _handle_reactor_finished(self, finishedReactor: RunningReactor):
+        """
+        Called from the plant execution loop when a reactor has finished.
+        Performs book keeping by marking reactor as executed, signing
+        the produced ingredients, etc.
+
+        :param finishedReactor:
+        :return:
+        """
+
+        del self.runningReactors[finishedReactor.name]
+
+        # Finished running, update the signature, since now we surely know
+        # all the referenced subreactors.
+        self._compute_reactor_signature(finishedReactor.name)
+        finishedReactor.reactorObject.wasRun = True
+        # Now that the reactor has finished running, we can compute the signatures for all
+        # the ingredients that it has produced. (Now we know all the inputs and sub-reactors.)
+        for outputName in finishedReactor.reactorObject.outputs:
+            signature = self._compute_ingredient_signature(outputName)
+            assert (signature is not None)
+            self.warehouse.sign_fresh_ingredient(outputName, signature)
+
+        # Save the current cache, so the results of this reactor
+        # are safe from the potential future crashes of reactors that follow.
+        self._save_cache()
+
+    def _get_next_reactor_to_update(self) -> RunningReactor:
+        """
+        During the plant execution loop, figure out which reactor to update next
+        based on available/missing ingredients and execution history.
+        :return:
+        """
+        nextReactor = None  # type: Plant.RunningReactor
+
+        # Check if we have a paused reactor waiting for an ingredient that was just produced,
+        # or a reactor without any dependencies (just scheduled).
+        for runningReactor in self.runningReactors.values():
+            awaitedIngredient = runningReactor.awaitedIngredient
+            if awaitedIngredient is None or self._is_ingredient_fresh(awaitedIngredient):
+                nextReactor = runningReactor
+                break
+
+        # If no reactors are ready to run, look for missing ingredients by scheduling
+        # new/modified reactors to run.
+        if nextReactor is None:
+            self.logger.info("Some ingredients are missing. Running new reactors...")
+            for reactor in self.reactors.values():
+                if not reactor.wasRun and not self._is_reactor_running(reactor.name):
+                    nextReactor = self._start_reactor(reactor)
+                    break
+
+        if nextReactor is None:
+            debugDump = "Running reactors: {} \n".format(self.runningReactors.keys())
+            missingIngredients = [r.awaitedIngredient for r in self.runningReactors.values()
+                                  if r.awaitedIngredient is not None]
+            debugDump += "Missing ingredients: {} \n".format(missingIngredients)
+            self.logger.debug(">>> Plant state dump: \n" + debugDump)
+
+            raise RuntimeError("Could not find a reactor that should run next. Reactors not added? Deadlock?")
+
+        return nextReactor
 
     def _get_producing_reactor(self, ingredientName: str) -> Union['Reactor', None]:
         if ingredientName not in self.ingredients:
