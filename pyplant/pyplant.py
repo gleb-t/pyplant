@@ -137,8 +137,8 @@ class Plant:
         if not os.path.exists(plantDir):
             os.makedirs(plantDir)
 
+        self._setup_logger(logLevel, logger)
         self.plantDir = plantDir
-        self.logger = logger or logging.getLogger('pyplant')
         self.reactors = {}  # type: Dict[str, Reactor]
         self.subreactors = {}  # type: Dict[str, Subreactor]  # todo unused, remove (after adding tests)
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
@@ -153,13 +153,6 @@ class Plant:
         self.functionHash = functionHash
         self.stringHash = stringHash
 
-        self.logger.handlers = []  # In case the logger already exists.
-        stdoutHandler = logging.StreamHandler(sys.stdout)
-        formatter = logging.Formatter('[%(asctime)s - %(name)s - %(levelname)s] %(message)s')
-        stdoutHandler.setFormatter(formatter)
-        self.logger.addHandler(stdoutHandler)
-        self.logger.setLevel(logLevel or logging.INFO)
-
         self.eventListeners = {}  # type: Dict[Plant.EventType, List[Callable[[Plant.EventType, Any], None]]]
 
         plantPath = os.path.join(self.plantDir, 'plant.pcl')
@@ -168,6 +161,17 @@ class Plant:
                 plantCache = pickle.load(file)
                 self.reactors = plantCache['reactors']
                 self.ingredients = plantCache['ingredients']
+
+    def _setup_logger(self, logLevel, logger):
+        self.logger = logger
+        if logger is None:
+            self.logger = logging.getLogger('pyplant')
+            self.logger.handlers = []  # In case the logger already exists.
+            stdoutHandler = logging.StreamHandler(sys.stdout)
+            formatter = logging.Formatter('[%(asctime)s - %(name)s - %(levelname)s] %(message)s')
+            stdoutHandler.setFormatter(formatter)
+            self.logger.addHandler(stdoutHandler)
+            self.logger.setLevel(logLevel or logging.INFO)
 
     def __enter__(self):
         return self
