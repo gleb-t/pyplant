@@ -743,7 +743,6 @@ class Ingredient:
         self.isFresh = False
 
 
-
 class Warehouse:
 
     def __init__(self, baseDir, logger: logging.Logger):
@@ -780,10 +779,11 @@ class Warehouse:
         if name not in self.manifest:
             self.logger.debug("Ingredient is not in the warehouse.")
             return None
-        elif signature is not None and signature != self.manifest[name]['signature']:
+
+        if signature is not None and signature != self.manifest[name]['signature']:
             # The stored ingredient is outdated (Right now we only store a single version of an ingredient).
             self.logger.debug("Ingredient is outdated. Pruning from the warehouse.")
-            self._prune(name)
+            self._prune(name, self.manifest[name]['type'])
             return None
 
         if name in self.cache:
@@ -814,8 +814,8 @@ class Warehouse:
             raise RuntimeError("Ingredient is being overwritten, this is not yet supported.")
 
         if ingredient.name in self.manifest:
-            self.logger.debug("Ingredient is already in the warehouse, pruning (not yet implemented).")  #todo
-            self._prune(ingredient.name)
+            self.logger.debug("Ingredient is already in the warehouse, pruning.")
+            self._prune(ingredient.name, ingredient.type)
 
         if ingredient.type == Ingredient.Type.simple:
             self._store_simple(ingredient.name, value)
@@ -856,8 +856,8 @@ class Warehouse:
         # Store the new signature.
         self.manifest[ingredientName]['signature'] = signature
 
-    def _prune(self, name):
-        pass
+    def _prune(self, name: str, type: Ingredient.Type):
+        pass  # We are overwriting on store, for now there's no need for explicit pruning.
 
     def _store_simple(self, name, value):
         self.simpleStore[name] = value

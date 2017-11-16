@@ -1,8 +1,13 @@
 import unittest
 import shutil
 import tempfile
+import os
 import inspect
 from typing import Callable
+
+import logging
+
+import h5py
 import numpy as np
 
 from pyplant import *
@@ -399,3 +404,93 @@ class PyPlantTest(unittest.TestCase):
             self.plant.run_reactor(reactor_b)
 
         self.assertEqual(self.startedReactors, ['reactor_b'])  # No need to rerun reactor_a.
+
+
+class PyPlantWarehouseTest(unittest.TestCase):
+
+    def setUp(self):
+        super().setUp()
+
+        self.dir = tempfile.mkdtemp()
+
+        self.ingredientsToTest = {
+            'simple': (Ingredient.Type.simple, 'Value1'),
+            'object': (Ingredient.Type.object, slice(1, 10, 2)),
+            'array': (Ingredient.Type.array, np.ones(10, dtype=np.int32)),
+            'huge_array': (Ingredient.Type.huge_array, np.ones(10, dtype=np.int32)),
+        }
+
+        self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
+
+        for name, (type, value) in self.ingredientsToTest.items():
+            ingredient = Ingredient(name)
+            ingredient.type = type
+            ingredient.set_current_signature('initialSignature')
+
+            if ingredient.type == Ingredient.Type.huge_array:
+                value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
+
+            self.warehouse.store(ingredient, value)
+
+    def tearDown(self):
+        super().tearDown()
+
+        self.warehouse.close()
+        shutil.rmtree(self.dir)
+        
+    def _assert_equal(self, type: Ingredient.Type, valA, valB, msg=None):
+        if type == Ingredient.Type.simple or type == Ingredient.Type.object:
+            self.assertEqual(valA, valB, msg=msg)
+        elif type == Ingredient.Type.array or type == Ingredient.Type.huge_array:
+            self.assertTrue(np.all(np.equal(valA[...], valB[...])))
+        else:
+            raise RuntimeError("Unsupported ingredient type: '{}'".format(type))
+
+    def test_warehouse_fetches(self):
+
+        for name, (type, value) in self.ingredientsToTest.items():
+            fetchedValue = self.warehouse.fetch(name, 'initialSignature')
+            self._assert_equal(type, value, fetchedValue)
+    
+    # def test_warehouse_prunes_on_fetch(self):
+    #
+    #     for name, (type, value) in self.ingredientsToTest.items():
+    #         fetchedValue = self.warehouse.fetch(name, 'changedSignature')
+    #         self.assertIsNone(fetchedValue, msg="Signature changed, shouldn't return anything")
+    #
+    #     for name, (type, value) in self.ingredientsToTest.items():
+    #         fetchedValue = self.warehouse.fetch(name, 'initialSignature')
+    #         self.assertIsNone(fetchedValue, msg="Should prune the old value.")
+
+    def test_warehouse_prunes_on_store(self):
+
+        # Restart the warehouse, so we aren't overwriting ingredients within the same session (this is not allowed).
+        self.warehouse.close()
+        self.warehouse = pyplant.Warehouse(self.dir, logging.getLogger('temp'))
+
+        for name, (type, value) in self.ingredientsToTest.items():
+            ingredient = Ingredient(name)
+            ingredient.type = type
+            ingredient.set_current_signature('changedSignature')
+
+            if ingredient.type == Ingredient.Type.huge_array:
+                value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
+
+            self.warehouse.store(ingredient, value)
+
+        for name, (type, value) in self.ingredientsToTest.items():
+            fetchedValue = self.warehouse.fetch(name, 'initialSignature')
+            self.assertIsNone(fetchedValue, msg="New value stored, should prune the old one.")
+
+    def test_overwriting_raises_exception(self):
+
+        for name, (type, value) in self.ingredientsToTest.items():
+            ingredient = Ingredient(name)
+            ingredient.type = type
+            ingredient.set_current_signature('changedSignature')
+
+            if ingredient.type == Ingredient.Type.huge_array:
+                value = self.warehouse.allocate(ingredient, shape=(10, 10), dtype=np.int32)
+
+            with self.assertRaises(RuntimeError):
+                self.warehouse.store(ingredient, value)
