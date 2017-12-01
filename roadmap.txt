@@ -6,3 +6,6 @@
 [] Improve manifest/warehouse resilience to crashes (e.g. resizable dataset can mess things up).
 [] Auto-add all reactors (a separate function, maybe?)
 [] Clear the cache/manifest if the PyPlant's version has changed.
+[] Allow to export an ingredient with some metadata. This later can be fed into the plant as some special 'fixed'
+   ingredient. The point is to provide easier reproducibility, so that no extra code needs to be written to
+   recreate some old result.
