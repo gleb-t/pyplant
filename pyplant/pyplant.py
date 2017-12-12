@@ -519,14 +519,17 @@ class Plant:
 
         if nextReactor is None:
             debugDump = "Running reactors: {} \n".format(self.runningReactors.keys())
-            missingIngredients = [r.awaitedIngredient for r in self.runningReactors.values()
-                                  if r.awaitedIngredient is not None]
+            missingIngredients = self._get_awaited_ingredients()
             debugDump += "Missing ingredients: {} \n".format(missingIngredients)
-            self.logger.debug(">>> Plant state dump: \n" + debugDump)
+            self.logger.info(">>> Plant state dump: \n" + debugDump)
 
             raise RuntimeError("Could not find a reactor that should run next. Reactors not added? Deadlock?")
 
         return nextReactor
+
+    def _get_awaited_ingredients(self):
+        return [reactor.awaitedIngredient for reactor in self.runningReactors.values()
+                if reactor.awaitedIngredient is not None]
 
     def _get_producing_reactor(self, ingredientName: str) -> Union['Reactor', None]:
         if ingredientName not in self.ingredients:
