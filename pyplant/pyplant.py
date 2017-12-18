@@ -621,6 +621,16 @@ class Pipework:
 
         return self.plant.get_config_param(paramName)
 
+    def read_config_unregistered(self, paramName: str) -> Any:
+        """
+        Read a configuration parameter without registering it with the plant,
+        i.e. without creating a dependency.
+        (Useful for reporting/debugging code.)
+        :param paramName:
+        :return:
+        """
+        return self.plant.get_config_param(paramName)
+
     def _register_output(self, name, type):
         ingredient = self.plant._get_or_create_ingredient(name)
         ingredient.type = type
