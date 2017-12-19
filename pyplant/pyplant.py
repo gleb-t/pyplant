@@ -282,7 +282,7 @@ class Plant:
             self.logger.debug("Found the signature in cache: '{}'".format(ingredient.signature))
             return ingredient.signature
 
-        reactor = self._get_producing_reactor(ingredientName)
+        reactor = self._get_producing_reactor(ingredientName)  # type: Reactor
 
         # If we don't know the producing reactor, or it has changed and wasn't run yet,
         # we cannot compute the signature.
@@ -293,6 +293,8 @@ class Plant:
         self.logger.debug("Collecting sub-ingredient signatures...")
         subingredientSignatures = []
         for subingredientName in sorted(reactor.get_inputs()):
+            if subingredientName in reactor.get_outputs():  # Avoid infinite recursion on our own products.
+                continue
             subsignature = self._compute_ingredient_signature(subingredientName)
             if subsignature is None:
                 self.logger.debug("Signature for '{}' is unknown.".format(ingredientName))
@@ -306,9 +308,14 @@ class Plant:
         subingredientSignature = self.stringHash(''.join(subingredientSignatures))
 
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
-        parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())
-                            if name not in self.configAuxiliaryFlag]
-        parameterSignature = self.stringHash(''.join(parameterStrings))
+        try:
+            parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())
+                                if name not in self.configAuxiliaryFlag]
+            parameterSignature = self.stringHash(''.join(parameterStrings))
+        except KeyError as e:
+            self.logger.info("Couldn't compute signature for ingredient '{}' because parameter '{}' is missing."
+                             .format(ingredientName, e.args[0]))
+            return None
 
         signatureParts = [reactor.get_signature(), subingredientSignature, parameterSignature, ingredientName]
         fullSignature = self.stringHash(''.join(signatureParts))
@@ -585,7 +592,7 @@ class Pipework:
     """
 
     def __init__(self, plant: Plant, warehouse: 'Warehouse', connectedReactor: 'Reactor', logger: logging.Logger):
-        self.plant = plant
+        self.plant = plant  # type: Plant
         self.warehouse = warehouse
         self.connectedReactor = connectedReactor  # Which reactor this pipework is connected to.
         self.logger = logger
@@ -595,7 +602,10 @@ class Pipework:
         self.connectedReactor.register_input(name)
 
         signature = self.plant._compute_ingredient_signature(name)
-        if signature is None:
+        # If signature is unknown, we can't fetch an ingredient (needs to be produced).
+        # Exception: if ingredient exists and it's fresh (though still without signature),
+        # we can fetch it. This supports reactors that fetch their own products.
+        if signature is None and not self.plant._is_ingredient_fresh(name):
             return Plant.IngredientAwaitedCommand(name)
 
         ingredientValue = self.warehouse.fetch(name, signature)
@@ -666,6 +676,9 @@ class Reactor:
 
     def get_inputs(self):
         return self.inputs
+
+    def get_outputs(self):
+        return self.outputs
 
     def get_params(self):
         return self.params

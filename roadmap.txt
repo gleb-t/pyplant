@@ -9,3 +9,7 @@
 [] Allow to export an ingredient with some metadata. This later can be fed into the plant as some special 'fixed'
    ingredient. The point is to provide easier reproducibility, so that no extra code needs to be written to
    recreate some old result.
+
+
+[!] Test for reactors (with subreactors) fetching their own ingredients. + Robustness test for merging
+    two reactors into one (and now fetching your own ingredients.). This shouldn't break the plant.
