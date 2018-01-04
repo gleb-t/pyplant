@@ -356,6 +356,59 @@ class PyPlantTest(unittest.TestCase):
         self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_mid'])
         self.assertEqual(self.startedSubreactors, ['subreactor_b'])
 
+    def test_fetching_own_products(self):
+        config = {'param-a': 1, 'param-b': 2}
+
+        reactorBResult = None
+
+        @SubreactorFunc
+        def subreactor_a(pipe: Pipework):
+            paramA = pipe.read_config('param-a')
+            a = paramA + 10  # Do stuff.
+
+            pipe.send('subreactor-a-product', a, Ingredient.Type.simple)
+            yield
+
+        @SubreactorFunc
+        def subreactor_b(pipe: Pipework):
+            aProduct = yield pipe.receive('subreactor-a-product')
+            b = aProduct + 15
+            pipe.send('subreactor-b-product', b, Ingredient.Type.simple)
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            yield from subreactor_a(pipe)
+            yield from subreactor_b(pipe)
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            nonlocal reactorBResult
+            reactorBResult = yield pipe.receive('subreactor-b-product')
+
+        # First pass, everything is executed, reactor B depends on A through a subreactor.
+        self._construct_plant(config, [reactor_a, reactor_b])
+        self.plant.run_reactor('reactor_b')
+
+        self.assertEqual(self.startedSubreactors, ['subreactor_a', 'subreactor_b'])
+        self.assertEqual(reactorBResult, 1 + 10 + 15)
+
+        # Test that the results are cached.
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b'])
+        self.assertEqual(self.startedSubreactors, [])
+        self.assertEqual(reactorBResult, 1 + 10 + 15)
+
+        # Modifying a parameter used by a subreactor causes re-execution.
+        config['param-a'] = 5
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(reactor_b)
+
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_a'])
+        self.assertEqual(self.startedSubreactors, ['subreactor_a', 'subreactor_b'])
+        self.assertEqual(reactorBResult, 5 + 10 + 15)
+
     def test_state_saved_on_crash(self):
         """
         Test that when a crash occurs, we are saving the results of all the previously executed reactors.

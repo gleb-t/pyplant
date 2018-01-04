@@ -603,12 +603,19 @@ class Pipework:
 
         signature = self.plant._compute_ingredient_signature(name)
         # If signature is unknown, we can't fetch an ingredient (needs to be produced).
-        # Exception: if ingredient exists and it's fresh (though still without signature),
-        # we can fetch it. This supports reactors that fetch their own products.
-        if signature is None and not self.plant._is_ingredient_fresh(name):
-            return Plant.IngredientAwaitedCommand(name)
+        # Exception: if fetching reactor's own product and it's fresh (though might still have no signature),
+        # we can fetch it right away.
+        isFetchingOwnProduct = name in self.connectedReactor.outputs and self.plant._is_ingredient_fresh(name)
+        isSignatureKnown = signature is not None
 
-        ingredientValue = self.warehouse.fetch(name, signature)
+        ingredientValue = None
+        if isFetchingOwnProduct:
+            # Ignore signature even when known: we have just produced the ingredient and can fetch it safely.
+            # Otherwise, we might still be using an outdated signature (signatures update after reactor stops).
+            ingredientValue = self.warehouse.fetch(name, None)
+        elif isSignatureKnown:
+            ingredientValue = self.warehouse.fetch(name, signature)
+
         if ingredientValue is None:
             return Plant.IngredientAwaitedCommand(name)
 
@@ -696,6 +703,7 @@ class Reactor:
             self.inputs.add(name)
 
     def register_output(self, name):
+        #todo can't remember why this check is needed.
         if 'outputs' not in self.__dict__:
             self.outputs = {name}
         else:

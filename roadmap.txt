@@ -11,5 +11,5 @@
    recreate some old result.
 
 
-[!] Test for reactors (with subreactors) fetching their own ingredients. + Robustness test for merging
-    two reactors into one (and now fetching your own ingredients.). This shouldn't break the plant.
+[!] Robustness test for merging two reactors into one (and now fetching your own ingredients).
+    This shouldn't break the plant.
