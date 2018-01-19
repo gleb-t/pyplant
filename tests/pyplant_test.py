@@ -211,6 +211,52 @@ class PyPlantTest(unittest.TestCase):
             self.assertEqual(trueVal, received[name])
             self.assertEqual(type(trueVal), type(received[name]))
 
+    def test_huge_arrays(self):
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            array1 = pipe.allocate('array1', Ingredient.Type.huge_array,
+                                   shape=(4, 5, 6, 7), dtype=np.uint8)
+            array2 = pipe.allocate('array2', Ingredient.Type.huge_array,
+                                   shape=(3, 500), dtype=np.bool)
+
+            array1[:, 3, 4, :] = 42
+            array2[2, :250] = True
+
+            pipe.send('array1', array1, Ingredient.Type.huge_array)
+            pipe.send('array2', array2, Ingredient.Type.huge_array)
+
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+
+            array1 = yield pipe.receive('array1')
+            array2 = yield pipe.receive('array2')
+
+            self.assertTrue(np.all(np.equal(array1[:, 3, 4, :], 42)))
+            self.assertTrue(np.all(np.not_equal(array1[:, :3, :, :], 42)))
+            self.assertTrue(np.all(np.not_equal(array1[:, 4:, :, :], 42)))
+            self.assertTrue(np.all(np.not_equal(array1[:, :, :4, :], 42)))
+            self.assertTrue(np.all(np.not_equal(array1[:, :, 5:, :], 42)))
+
+            self.assertTrue(np.all(np.equal(array2[2, :250], True)))
+            self.assertTrue(np.all(np.not_equal(array2[2, 250:], True)))
+            self.assertTrue(np.all(np.not_equal(array2[:2, :], True)))
+
+            yield
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        self.assertEqual(self.startedReactors, ['consumer', 'producer'],
+                         msg='Both reactors should run initially.')
+
+        self._reconstruct_plant({})
+        self.plant.run_reactor(consumer)
+
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+
     def test_subreactors_basic(self):
         config = {'param-a': 1, 'param-b': 2}
 

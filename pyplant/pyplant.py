@@ -588,7 +588,7 @@ class Plant:
 class Pipework:
     """
     Used by reactors to send and receive ingredients.
-    A unique instance is attached to each reactor,
+    A unique instance is attached to each reactor.
     """
 
     def __init__(self, plant: Plant, warehouse: 'Warehouse', connectedReactor: 'Reactor', logger: logging.Logger):
@@ -783,7 +783,7 @@ class Warehouse:
         self.baseDir = baseDir
         self.cache = {}
         self.simpleStore = {}
-        self.h5File = h5py.File(os.path.join(self.baseDir, 'warehouse.h5py'), mode='a')
+        self.h5Files = {}  # type: Dict[str, h5py.File]
         self.logger = logger
 
         manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
@@ -924,28 +924,39 @@ class Warehouse:
 
     def _allocate_huge_array(self, name, shape, dtype=np.float, **kwargs):
         dataset = self._fetch_huge_array(name)
+        h5FilePath = self._get_huge_array_filepath(name)
 
         # If the dataset already exists, but has a wrong shape/type, recreate it.
         if dataset is not None and (dataset.shape != shape or dataset.dtype != dtype):
-            del self.h5File[name]
+            del self.h5Files[name]['data']
+            self.h5Files[name].close()
+            os.remove(h5FilePath)
             dataset = None
 
         if dataset is None:
-            dataset = self.h5File.create_dataset(name, shape=shape, dtype=dtype, **kwargs)
+            self.h5Files[name] = h5py.File(h5FilePath, 'a')
+            dataset = self.h5Files[name].create_dataset('data', shape=shape, dtype=dtype, **kwargs)
 
         return dataset
+
+    def _get_huge_array_filepath(self, name):
+        return os.path.join(self.baseDir, name + '.hdf')
 
     def _store_huge_array(self, name, value: h5py.Dataset):
         # H5py takes care of storing to disk on-the-fly.
         # Just flush the data, to make sure that it is persisted.
-        self.h5File.flush()
+        self.h5Files[name].flush()
         pass
 
     def _fetch_huge_array(self, name):
-        if name in self.h5File:
-            return self.h5File[name]
+        h5FilePath = self._get_huge_array_filepath(name)
+        if name not in self.h5Files:
+            if os.path.exists(h5FilePath):
+                self.h5Files[name] = h5py.File(h5FilePath, 'a')
+            else:
+                return None
 
-        return None
+        return self.h5Files[name]['data']
 
     def _store_keras_model(self, name, value):
 
@@ -967,5 +978,6 @@ class Warehouse:
             pickle.dump(self.manifest, file)
 
     def close(self):
-        self.h5File.close()
+        for name, h5File in self.h5Files.items():
+            h5File.close()
         self._save_manifest()
