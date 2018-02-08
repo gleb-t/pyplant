@@ -951,9 +951,17 @@ class Warehouse:
     def _fetch_huge_array(self, name):
         h5FilePath = self._get_huge_array_filepath(name)
         if name not in self.h5Files:
-            if os.path.exists(h5FilePath):
+            if not os.path.exists(h5FilePath):
+                return None
+
+            # If the array isn't in the manifest, but exists on disk, attempt to open it.
+            try:
                 self.h5Files[name] = h5py.File(h5FilePath, 'a')
-            else:
+            except OSError as e:
+                self.logger.warning("Failed to open the HDF array at '{}' with error: {}"
+                                    .format(h5FilePath, str(e)))
+                self.logger.info("Deleting the corrupted file.")
+                os.remove(h5FilePath)
                 return None
 
         return self.h5Files[name]['data']

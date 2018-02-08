@@ -536,7 +536,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
 
         self.warehouse.close()
         shutil.rmtree(self.dir)
-        
+
     def _assert_equal(self, type: Ingredient.Type, valA, valB, msg=None):
         if type == Ingredient.Type.simple or type == Ingredient.Type.object:
             self.assertEqual(valA, valB, msg=msg)
@@ -593,3 +593,23 @@ class PyPlantWarehouseTest(unittest.TestCase):
 
             with self.assertRaises(RuntimeError):
                 self.warehouse.store(ingredient, value)
+
+    def test_graceful_overwrite_on_corrupted_hdf_files(self):
+        # Store a new huge array ingredient.
+        ingredient = Ingredient('test-dataset')
+        ingredient.type = Ingredient.Type.huge_array
+
+        dataset = self.warehouse.allocate(ingredient, shape=(300, 20, 20), dtype=np.float32)
+        dataset[100:200] = 66
+        self.warehouse.store(ingredient, dataset)
+
+        self.warehouse.close()
+        hdfFilePath = self.warehouse._get_huge_array_filepath('test-dataset')
+        with open(hdfFilePath, mode='wb') as file:
+            file.write(bytearray([255] * 300))
+
+        self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
+        dataset = self.warehouse.fetch('test-dataset', None)
+
+        self.assertIsNone(dataset)
+        self.assertFalse(os.path.exists(hdfFilePath))
