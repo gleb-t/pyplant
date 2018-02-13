@@ -186,6 +186,7 @@ class Plant:
         self.warehouse.close()
 
     def _save_cache(self):
+        self.logger.info("Saving plant state to disk.")
         with open(os.path.join(self.plantDir, 'plant.pcl'), 'wb') as file:
             pickle.dump({
                 'reactors': self.reactors,
@@ -928,9 +929,12 @@ class Warehouse:
 
         # If the dataset already exists, but has a wrong shape/type, recreate it.
         if dataset is not None and (dataset.shape != shape or dataset.dtype != dtype):
-            del self.h5Files[name]['data']
-            self.h5Files[name].close()
-            os.remove(h5FilePath)
+            try:
+                self.h5Files[name].close()
+                os.remove(h5FilePath)
+            except RuntimeError as e:
+                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
+                                    .format(name, e))
             dataset = None
 
         if dataset is None:
@@ -963,6 +967,16 @@ class Warehouse:
                 self.logger.info("Deleting the corrupted file.")
                 os.remove(h5FilePath)
                 return None
+
+        if 'data' not in self.h5Files[name]:
+            self.logger.info("The HDF file at '{}' has no dataset. Corrupted file, deleting.".format(h5FilePath))
+            try:
+                self.h5Files[name].close()
+                os.remove(h5FilePath)
+            except RuntimeError as e:
+                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
+                                    .format(name, e))
+            return None
 
         return self.h5Files[name]['data']
 
