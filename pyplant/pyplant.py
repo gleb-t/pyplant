@@ -818,6 +818,7 @@ class Warehouse:
         if signature is not None and signature != self.manifest[name]['signature']:
             # The stored ingredient is outdated (Right now we only store a single version of an ingredient).
             self.logger.debug("Ingredient is outdated. Pruning from the warehouse.")
+            self.logger.debug("Warehouse signature was: '{}'.".format(self.manifest[name]['signature']))
             self._prune(name, self.manifest[name]['type'])
             return None
 
