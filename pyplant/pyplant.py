@@ -476,7 +476,7 @@ class Plant:
     def _handle_reactor_finished(self, finishedReactor: RunningReactor):
         """
         Called from the plant execution loop when a reactor has finished.
-        Performs book keeping by marking reactor as executed, signing
+        Performs bookkeeping by marking reactor as executed, signing
         the produced ingredients, etc.
 
         :param finishedReactor:
@@ -495,6 +495,13 @@ class Plant:
             signature = self._compute_ingredient_signature(outputName)
             assert (signature is not None)
             self.warehouse.sign_fresh_ingredient(outputName, signature)
+
+        # Deallocate any temp ingredients allocated by the reactor.
+        for name in list(self.ingredients.keys()):  # Avoid iterating directly over the edited dict.
+            ingredient = self.ingredients[name]
+            if ingredient.isTemp and ingredient.producerName == finishedReactor.name:
+                self.warehouse.deallocate_temp(ingredient)
+                del self.ingredients[name]
 
         # Save the current cache, so the results of this reactor
         # are safe from the potential future crashes of reactors that follow.
@@ -623,16 +630,25 @@ class Pipework:
         return ingredientValue
 
     def send(self, name: str, value: Any, type: 'Ingredient.Type'):
-        self.logger.debug("Reactor '{}' is sending ingredient '{}'".format(self.connectedReactor.name, name))
+        self.logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self.connectedReactor.name, name))
 
         ingredient = self._register_output(name, type)
         self.warehouse.store(ingredient, value)
 
     def allocate(self, name: str, type: 'Ingredient.Type', **kwargs):
-        self.logger.debug("Reactor '{}' is allocating ingredient '{}'".format(self.connectedReactor.name, name))
+        self.logger.debug("Reactor '{}' is allocating ingredient '{}'.".format(self.connectedReactor.name, name))
 
         ingredient = self._register_output(name, type)
         return self.warehouse.allocate(ingredient, **kwargs)
+
+    def allocate_temp(self, name: str, type: 'Ingredient.Type', **kwargs):
+        self.logger.debug("Reactor '{}' is allocating a temp ingredient '{}'.".format(self.connectedReactor.name, name))
+
+        # Temp ingredients aren't registered as outputs.
+        ingredient = self._create_ingredient(name, type)
+        ingredient.isTemp = True
+
+        return self.warehouse.allocate_temp(ingredient, **kwargs)
 
     def read_config(self, paramName: str) -> Any:
         self.connectedReactor.register_parameter(paramName)
@@ -650,12 +666,16 @@ class Pipework:
         return self.plant.get_config_param(paramName)
 
     def _register_output(self, name, type):
+        ingredient = self._create_ingredient(name, type)
+        self.connectedReactor.register_output(name)
+
+        return ingredient
+
+    def _create_ingredient(self, name, type):
         ingredient = self.plant._get_or_create_ingredient(name)
         ingredient.type = type
         ingredient.producerName = self.connectedReactor.name
         ingredient.isFresh = True
-
-        self.connectedReactor.register_output(name)
 
         return ingredient
 
@@ -761,6 +781,9 @@ class Ingredient:
         self.isFresh = False  # Whether has been produced during the current plant run (not loaded from disk).
         self.type = Ingredient.Type.unknown
         self.producerName = None
+        # Temporary ingredients can be created to hold intermediate results, and will be removed
+        # when the reactor finishes.
+        self.isTemp = False
 
     def set_current_signature(self, signature):
         self.signature = signature
@@ -883,6 +906,26 @@ class Warehouse:
 
         return self._allocate_huge_array(ingredient.name, **kwargs)
 
+    def allocate_temp(self, ingredient: Ingredient, **kwargs):
+        """
+        Temp ingredients are automatically removed when the allocating reactor finishes.
+        :param ingredient:
+        :param kwargs:
+        :return:
+        """
+        self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
+        if ingredient.type != Ingredient.Type.huge_array:
+            raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
+
+        return self._allocate_huge_array('temp_' + ingredient.name, **kwargs)
+
+    def deallocate_temp(self, ingredient: Ingredient):
+        self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
+        if ingredient.type != Ingredient.Type.huge_array:
+            raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
+
+        return self._deallocate_huge_array('temp_' + ingredient.name)
+
     def sign_fresh_ingredient(self, ingredientName: str, signature: str):
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
         assert(signature is not None)
@@ -943,6 +986,20 @@ class Warehouse:
             dataset = self.h5Files[name].create_dataset('data', shape=shape, dtype=dtype, **kwargs)
 
         return dataset
+
+    def _deallocate_huge_array(self, name):
+        h5FilePath = self._get_huge_array_filepath(name)
+
+        if name not in self.h5Files:
+            raise RuntimeError("Cannot deallocate huge array '{}', it doesn't exist.".format(name))
+
+        if not os.path.exists(h5FilePath):
+            raise RuntimeError("Cannot deallocate huge array '{}', the file doesn't exist: '{}'."
+                               .format(name, h5FilePath))
+
+        self.h5Files[name].close()
+        del self.h5Files[name]
+        os.unlink(h5FilePath)
 
     def _get_huge_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.hdf')
