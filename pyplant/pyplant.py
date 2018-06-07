@@ -581,6 +581,10 @@ class Plant:
         self.config = configMap
 
     def mark_params_as_auxiliary(self, params: List[str]):
+        """
+        Auxiliary config parameters do not affect the signature of ingredients,
+        so that they can be changed without triggering re-production of the affected ingredients.
+        """
         for name in params:
             if name not in self.config:
                 raise RuntimeError("Parameter '{}' cannot be found.".format(name))
