@@ -4,6 +4,7 @@ import pickle
 import inspect
 import hashlib
 import logging
+import warnings
 from typing import Callable, Any, Dict, Generator, Union, List, Tuple
 from enum import Enum
 from types import SimpleNamespace
@@ -25,7 +26,11 @@ __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 #
 
 def _compute_function_hash(func: Callable) -> str:
-    sourceLines = inspect.getsourcelines(func)
+    try:
+        sourceLines = inspect.getsourcelines(func)
+    except OSError as e:
+        warnings.warn("Failed to get function source code: {}".format(e))
+        sourceLines = 'source-not-available_{}'.format(time.time())
     functionSource = ''.join(sourceLines[0])
 
     return _compute_string_hash(functionSource)
