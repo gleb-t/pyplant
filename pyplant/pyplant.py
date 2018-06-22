@@ -1,3 +1,6 @@
+import time
+import datetime
+from dateutil.relativedelta import relativedelta
 import os
 import sys
 import pickle
@@ -11,7 +14,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import h5py
-import time
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
 
@@ -117,6 +119,20 @@ class Plant:
 
             self.totalRunTime = 0
 
+    class ExecutionRecord:
+
+        def __init__(self, reactorName: str, startTime: float = time.time(), totalRuntime: float = 0):
+            self.reactorName = reactorName  # type: str
+            self.startTime = startTime  # type: float
+            self.totalRuntime = totalRuntime  # type: float
+            self.finishTime = None  # type: str
+
+        def __str__(self, *args, **kwargs):
+            return str(self.__dict__)
+
+        def __repr__(self, *args, **kwargs):
+            return str(self.__dict__)
+
     class IngredientAwaitedCommand:
 
         def __init__(self, ingredientName: str):
@@ -147,7 +163,7 @@ class Plant:
         self.reactors = {}  # type: Dict[str, Reactor]
         self.subreactors = {}  # type: Dict[str, Subreactor]  # todo unused, remove (after adding tests)
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
-        self.executionHistory = []  # type: List[str]
+        self.executionHistory = {}  # type: Dict[str, Plant.ExecutionRecord]
         self.ingredients = {}  # type: Dict[str, Ingredient]
         self.warehouse = Warehouse(plantDir, self.logger)
         self.pipeworks = {}
@@ -276,6 +292,38 @@ class Plant:
             if callback in listenerList:
                 listenerList.remove(callback)
 
+    def set_config(self, configMap):
+        self.config = configMap
+
+    def mark_params_as_auxiliary(self, params: List[str]):
+        """
+        Auxiliary config parameters do not affect the signature of ingredients,
+        so that they can be changed without triggering re-production of the affected ingredients.
+        """
+        for name in params:
+            if name not in self.config:
+                raise RuntimeError("Parameter '{}' cannot be found.".format(name))
+            self.configAuxiliaryFlag[name] = True
+
+    def get_config_param(self, name: str) -> Any:
+        if name in self.config:
+            return self.config[name]
+
+        raise RuntimeError("Unknown config parameter: '{}'".format(name))
+
+    def get_execution_history(self) -> Dict[str, ExecutionRecord]:
+        return self.executionHistory
+
+    def print_execution_history(self, printFn: Callable[[Any], Any]=print):
+        recordsSorted = sorted(self.executionHistory.values(), key=lambda r: r.totalRuntime, reverse=True)
+        printFn("====================================================================================================")
+        printFn("{:50} day hrs min sec total".format("Reactor"))
+        for record in recordsSorted:  # type: Plant.ExecutionRecord
+            dur = relativedelta(seconds=record.totalRuntime)
+            bits = ["{:3d}".format(int(getattr(dur, attr))) for attr in ['days', 'hours', 'minutes', 'seconds']]
+            printFn("{:-<50} {} {:.2f}s".format(record.reactorName, " ".join(bits), record.totalRuntime))
+        printFn("====================================================================================================")
+
     def _trigger_event(self, eventType: 'Plant.EventType', args: Tuple):
         if eventType in self.eventListeners:
             for callback in self.eventListeners[eventType]:
@@ -399,7 +447,7 @@ class Plant:
         # Schedule execution.
         runningReactor = Plant.RunningReactor(reactorObject.name, reactorObject)
         self.runningReactors[reactorObject.name] = runningReactor
-        self.executionHistory.append(reactorObject.name)
+        self.executionHistory[reactorObject.name] = Plant.ExecutionRecord(reactorObject.name)
 
         # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
         generator = reactorObject.func(pipework)
@@ -439,8 +487,8 @@ class Plant:
             # Keep iterating the generator until it either terminates, or requests a missing ingredient.
             missingIngredient = None
             while missingIngredient is None:
+                timeBefore = time.time()
                 try:
-                    timeBefore = time.time()
                     returnedObject = nextReactor.generator.send(valueToSend)  # Execute a step of the reactor
                     nextReactor.totalRunTime += time.time() - timeBefore  # Track time spend in execution.
                     if type(returnedObject) is Plant.IngredientAwaitedCommand:
@@ -458,10 +506,7 @@ class Plant:
                         valueToSend = returnedObject
 
                 except StopIteration:
-                    totalRuntimeMin = self.runningReactors[nextReactor.name].totalRunTime / 60.0
-                    self.logger.info("Reactor '{}' has finished running in {:.3} min."
-                                     .format(nextReactor.name, totalRuntimeMin))
-
+                    nextReactor.totalRunTime += time.time() - timeBefore  # Don't miss the duration of the last step.
                     self._handle_reactor_finished(nextReactor)
                     break
                 except Exception as e:
@@ -488,6 +533,10 @@ class Plant:
         :return:
         """
 
+        totalRuntimeMin = self.runningReactors[finishedReactor.name].totalRunTime / 60.0
+        self.logger.info("Reactor '{}' has finished running in {}"
+                         .format(finishedReactor.name, self._format_duration(totalRuntimeMin)))
+
         del self.runningReactors[finishedReactor.name]
 
         # Finished running, update the signature, since now we surely know
@@ -507,6 +556,9 @@ class Plant:
             if ingredient.isTemp and ingredient.producerName == finishedReactor.name:
                 self.warehouse.deallocate_temp(ingredient)
                 del self.ingredients[name]
+
+        self.executionHistory[finishedReactor.name].finishTime = time.time()
+        self.executionHistory[finishedReactor.name].totalRuntime = finishedReactor.totalRunTime
 
         # Save the current cache, so the results of this reactor
         # are safe from the potential future crashes of reactors that follow.
@@ -582,24 +634,16 @@ class Plant:
 
         return self.pipeworks[reactor.name]
 
-    def set_config(self, configMap):
-        self.config = configMap
-
-    def mark_params_as_auxiliary(self, params: List[str]):
-        """
-        Auxiliary config parameters do not affect the signature of ingredients,
-        so that they can be changed without triggering re-production of the affected ingredients.
-        """
-        for name in params:
-            if name not in self.config:
-                raise RuntimeError("Parameter '{}' cannot be found.".format(name))
-            self.configAuxiliaryFlag[name] = True
-
-    def get_config_param(self, name: str) -> Any:
-        if name in self.config:
-            return self.config[name]
-
-        raise RuntimeError("Unknown config parameter: '{}'".format(name))
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        dur = relativedelta(seconds=seconds)
+        bits = []
+        for attr in ['days', 'hours', 'minutes']:
+            attrVal = int(getattr(dur, attr))
+            if attrVal > 0:
+                bits.append("{:d}{}".format(attrVal, attr[0]))
+        bits.append("{:.2f}s".format(dur.seconds))  # Always display seconds.
+        return " ".join(bits)
 
 
 class Pipework:

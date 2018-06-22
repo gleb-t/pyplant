@@ -100,6 +100,9 @@ plant.run_reactor(reactor_d)
 
 plant.shutdown()
 
+plant.print_execution_history()
+print(plant.get_execution_history())
+
 # def simple_generator(a):
 #     print(a)
 #     a = yield a
