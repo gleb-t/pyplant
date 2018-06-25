@@ -533,9 +533,9 @@ class Plant:
         :return:
         """
 
-        totalRuntimeMin = self.runningReactors[finishedReactor.name].totalRunTime / 60.0
+        totalRuntime = self.runningReactors[finishedReactor.name].totalRunTime
         self.logger.info("Reactor '{}' has finished running in {}"
-                         .format(finishedReactor.name, self._format_duration(totalRuntimeMin)))
+                         .format(finishedReactor.name, self._format_duration(totalRuntime)))
 
         del self.runningReactors[finishedReactor.name]
 
