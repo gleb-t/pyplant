@@ -1,6 +1,7 @@
 import inspect
 
 from pyplant import *
+from pyplant.test import PipeworkMock
 
 
 def run_reactor_to_completion(reactorFunc, pipework: Pipework):
@@ -36,3 +37,12 @@ def run_reactor_to_completion(reactorFunc, pipework: Pipework):
             break
 
     return
+
+
+def run_subreactor_to_completion(subreactorGen, pipework: Pipework):
+    @ReactorFunc
+    def subreactor_wrapper(pipe: Pipework):
+        yield from subreactorGen
+
+    pipework = PipeworkMock({}, {})
+    run_reactor_to_completion(subreactor_wrapper, pipework)
