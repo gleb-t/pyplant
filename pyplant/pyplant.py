@@ -727,30 +727,30 @@ class Pipework:
     """
 
     def __init__(self, plant: Plant, warehouse: 'Warehouse', connectedReactor: 'Reactor', logger: logging.Logger):
-        self.plant = plant  # type: Plant
-        self.warehouse = warehouse
-        self.connectedReactor = connectedReactor  # Which reactor this pipework is connected to.
-        self.logger = logger
+        self._plant = plant  # type: Plant
+        self._warehouse = warehouse
+        self._connectedReactor = connectedReactor  # Which reactor this pipework is connected to.
+        self._logger = logger
         self.config = plant.get_config_object()._clone_with_pipe(self)
 
     def receive(self, name) -> Any:
-        self.logger.debug("Reactor '{}' is requesting ingredient '{}'".format(self.connectedReactor.name, name))
-        self.connectedReactor.register_input(name)
+        self._logger.debug("Reactor '{}' is requesting ingredient '{}'".format(self._connectedReactor.name, name))
+        self._connectedReactor.register_input(name)
 
-        signature = self.plant._compute_ingredient_signature(name)
+        signature = self._plant._compute_ingredient_signature(name)
         # If signature is unknown, we can't fetch an ingredient (needs to be produced).
         # Exception: if fetching reactor's own product and it's fresh (though might still have no signature),
         # we can fetch it right away.
-        isFetchingOwnProduct = name in self.connectedReactor.outputs and self.plant._is_ingredient_fresh(name)
+        isFetchingOwnProduct = name in self._connectedReactor.outputs and self._plant._is_ingredient_fresh(name)
         isSignatureKnown = signature is not None
 
         ingredientValue = None
         if isFetchingOwnProduct:
             # Ignore signature even when known: we have just produced the ingredient and can fetch it safely.
             # Otherwise, we might still be using an outdated signature (signatures update after reactor stops).
-            ingredientValue = self.warehouse.fetch(name, None)
+            ingredientValue = self._warehouse.fetch(name, None)
         elif isSignatureKnown:
-            ingredientValue = self.warehouse.fetch(name, signature)
+            ingredientValue = self._warehouse.fetch(name, signature)
 
         if ingredientValue is None:
             return Plant.IngredientAwaitedCommand(name)
@@ -758,25 +758,25 @@ class Pipework:
         return ingredientValue
 
     def send(self, name: str, value: Any, type: 'Ingredient.Type'):
-        self.logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self.connectedReactor.name, name))
+        self._logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self._connectedReactor.name, name))
 
         ingredient = self._register_output(name, type)
-        self.warehouse.store(ingredient, value)
+        self._warehouse.store(ingredient, value)
 
     def allocate(self, name: str, type: 'Ingredient.Type', **kwargs):
-        self.logger.debug("Reactor '{}' is allocating ingredient '{}'.".format(self.connectedReactor.name, name))
+        self._logger.debug("Reactor '{}' is allocating ingredient '{}'.".format(self._connectedReactor.name, name))
 
         ingredient = self._register_output(name, type)
-        return self.warehouse.allocate(ingredient, **kwargs)
+        return self._warehouse.allocate(ingredient, **kwargs)
 
     def allocate_temp(self, name: str, type: 'Ingredient.Type', **kwargs):
-        self.logger.debug("Reactor '{}' is allocating a temp ingredient '{}'.".format(self.connectedReactor.name, name))
+        self._logger.debug("Reactor '{}' is allocating a temp ingredient '{}'.".format(self._connectedReactor.name, name))
 
         # Temp ingredients aren't registered as outputs.
         ingredient = self._create_ingredient(name, type)
         ingredient.isTemp = True
 
-        return self.warehouse.allocate_temp(ingredient, **kwargs)
+        return self._warehouse.allocate_temp(ingredient, **kwargs)
 
     def read_config(self, paramName: str) -> Any:
         """
@@ -786,10 +786,10 @@ class Pipework:
         """
         self.register_config_param(paramName)
 
-        return self.plant._peek_config_param(paramName)
+        return self._plant._peek_config_param(paramName)
 
     def register_config_param(self, paramName):
-        self.connectedReactor.register_parameter(paramName)
+        self._connectedReactor.register_parameter(paramName)
 
         pass
 
@@ -801,18 +801,18 @@ class Pipework:
         :param paramName:
         :return:
         """
-        return self.plant._peek_config_param(paramName)
+        return self._plant._peek_config_param(paramName)
 
     def _register_output(self, name, type):
         ingredient = self._create_ingredient(name, type)
-        self.connectedReactor.register_output(name)
+        self._connectedReactor.register_output(name)
 
         return ingredient
 
     def _create_ingredient(self, name, type):
-        ingredient = self.plant._get_or_create_ingredient(name)
+        ingredient = self._plant._get_or_create_ingredient(name)
         ingredient.type = type
-        ingredient.producerName = self.connectedReactor.name
+        ingredient.producerName = self._connectedReactor.name
         ingredient.isFresh = True
 
         return ingredient
