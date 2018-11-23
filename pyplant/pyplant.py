@@ -1213,6 +1213,12 @@ class Warehouse:
             pickle.dump(self.manifest, file)
 
     def close(self):
-        for name, h5File in self.h5Files.items():
+        for name, h5File in list(self.h5Files.items()):
             h5File.close()
+            del self.h5Files[name]
+
         self._save_manifest()
+
+        # Explicitly clear the cache. This immediately deallocates NumPy arrays, instead of waiting for GC.
+        for name in list(self.cache.keys()):
+            del self.cache[name]
