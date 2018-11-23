@@ -1,5 +1,5 @@
 import time
-import datetime
+import copy
 from dateutil.relativedelta import relativedelta
 import os
 import sys
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import h5py
 
-__all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'Pipework', 'Ingredient']
+__all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'Pipework', 'Ingredient']
 
 
 # Random documentation:
@@ -82,9 +82,11 @@ def SubreactorFunc(func):
     if not inspect.isgeneratorfunction(func):
         raise RuntimeError("SubreactorFunc '{}' is not a generator function!".format(name))
 
-    # Store the current source hash globally. Will be needed for reactor signature computation.
+    # Store the current function globally. Will be needed for reactor signature computation.
+    # noinspection PyProtectedMember
     Plant._SubreactorFunctions[name] = func
 
+    # noinspection PyCompatibility
     def _pyplant_subreactor_wrapper(*args, **kwargs):
         # Notify the plant, that a subreactor is being called.
         yield Plant.SubreactorStartedCommand(name)
@@ -103,9 +105,9 @@ class Plant:
         reactor_started = 1,
         subreactor_started = 2,
 
-    # Global store of current sub-reactor source hashes.
+    # Global store of current sub-reactor functions.
     # Filled out during code importing through function augmentors.
-    _SubreactorFunctions = {}  # type: Dict[str, str]
+    _SubreactorFunctions = {}  # type: Dict[str, Callable]
 
     class RunningReactor:
 
@@ -161,15 +163,13 @@ class Plant:
         self._setup_logger(logLevel, logger)
         self.plantDir = plantDir
         self.reactors = {}  # type: Dict[str, Reactor]
-        self.subreactors = {}  # type: Dict[str, Subreactor]  # todo unused, remove (after adding tests)
         self.runningReactors = {}  # type: Dict[str, Plant.RunningReactor]
         self.executionHistory = {}  # type: Dict[str, Plant.ExecutionRecord]
         self.ingredients = {}  # type: Dict[str, Ingredient]
         self.warehouse = Warehouse(plantDir, self.logger)
         self.pipeworks = {}
-        self.config = {}
+        self.config = ConfigBase()  # type: ConfigBase
         # Marks which config params are 'auxiliary' and shouldn't affect ingredient signatures.
-        self.configAuxiliaryFlag = {}  # type: Dict[str, bool]
 
         self.functionHash = functionHash
         self.stringHash = stringHash
@@ -180,7 +180,7 @@ class Plant:
         if os.path.exists(plantPath):
             with open(plantPath, 'rb') as file:
                 plantCache = pickle.load(file)
-                self.reactors = plantCache['reactors']
+                self.reactors = plantCache['reactors']  # type: Dict[str, Reactor]
                 self.ingredients = plantCache['ingredients']
 
     def _setup_logger(self, logLevel, logger):
@@ -292,24 +292,24 @@ class Plant:
             if callback in listenerList:
                 listenerList.remove(callback)
 
-    def set_config(self, configMap):
-        self.config = configMap
+    def set_config(self, config: Union[Dict[str, Any], 'ConfigBase']):
+        if isinstance(config, ConfigBase):
+            self.config = config
+        else:
+            self.config = ConfigBase(dictionary=config)
 
     def mark_params_as_auxiliary(self, params: List[str]):
         """
         Auxiliary config parameters do not affect the signature of ingredients,
         so that they can be changed without triggering re-production of the affected ingredients.
         """
-        for name in params:
-            if name not in self.config:
-                raise RuntimeError("Parameter '{}' cannot be found.".format(name))
-            self.configAuxiliaryFlag[name] = True
+        self.config.mark_auxiliary(params)
 
-    def get_config_param(self, name: str) -> Any:
-        if name in self.config:
-            return self.config[name]
+    def get_config_object(self) -> 'ConfigBase':
+        return self.config
 
-        raise RuntimeError("Unknown config parameter: '{}'".format(name))
+    def _peek_config_param(self, name: str) -> Any:
+        return self.config.peek(name)
 
     def get_execution_history(self) -> Dict[str, ExecutionRecord]:
         return self.executionHistory
@@ -363,8 +363,8 @@ class Plant:
 
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
         try:
-            parameterStrings = ['{}_{}'.format(name, self.config[name]) for name in sorted(reactor.get_params())
-                                if name not in self.configAuxiliaryFlag]
+            parameterStrings = ['{}_{}'.format(name, self.config.peek(name)) for name in sorted(reactor.get_params())
+                                if not self.config.is_auxiliary(name)]
             parameterSignature = self.stringHash(''.join(parameterStrings))
         except KeyError as e:
             self.logger.info("Couldn't compute signature for ingredient '{}' because parameter '{}' is missing."
@@ -437,7 +437,7 @@ class Plant:
         if not reactorObject.wasRun:
             reactorObject.reset_metadata()
 
-        if reactorObject.func is None:
+        if not reactorObject.func_exists():
             self.logger.info("Reactor '{}' was removed or renamed.".format(reactorObject.name))
             return None
 
@@ -450,7 +450,7 @@ class Plant:
         self.executionHistory[reactorObject.name] = Plant.ExecutionRecord(reactorObject.name)
 
         # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
-        generator = reactorObject.func(pipework)
+        generator = reactorObject.run_func(pipework, pipework.config)
         if not inspect.isgenerator(generator):
             raise RuntimeError("Reactor '{}' is not a generator function!".format(reactorObject.name))
 
@@ -479,7 +479,8 @@ class Plant:
             awaitedIngredient = nextReactor.awaitedIngredient
             # If the reactor is waiting for an ingredient, fetch and send it.
             if awaitedIngredient is not None:
-                self.logger.debug("Providing reactor '{}' with ingredient '{}'".format(nextReactor.name, awaitedIngredient))
+                self.logger.debug("Providing reactor '{}' with ingredient '{}'".format(nextReactor.name,
+                                                                                       awaitedIngredient))
                 valueToSend = self.warehouse.fetch(awaitedIngredient)
 
             # A reactor is a generator function that yields either fetched ingredients,
@@ -498,7 +499,8 @@ class Plant:
                     elif type(returnedObject) is Plant.SubreactorStartedCommand:
                         # A sub-reactor is being launched. Remember the dependency and continue execution.
                         subreactorName = returnedObject.subreactorName
-                        self.logger.info("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name, subreactorName))
+                        self.logger.info("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name,
+                                                                                            subreactorName))
                         nextReactor.reactorObject.register_subreactor(subreactorName)
                         self._trigger_event(Plant.EventType.subreactor_started, (subreactorName,))
                     else:
@@ -518,7 +520,8 @@ class Plant:
 
             if missingIngredient is not None:
                 # A reactor paused due to a missing ingredient, try to produce it using previous knowledge.
-                self.logger.info("Will try to produce '{}' for reactor '{}'.".format(missingIngredient, nextReactor.name))
+                self.logger.info("Will try to produce '{}' for reactor '{}'.".format(missingIngredient,
+                                                                                     nextReactor.name))
                 self._try_produce_ingredient(missingIngredient)
 
         self.logger.info("Finished running all reactors.")
@@ -646,6 +649,77 @@ class Plant:
         return " ".join(bits)
 
 
+class ConfigBase:
+    """
+    A base class for config objects that should be used with the Plant.
+    Tracks the access to the config parameters and registers corresponding
+    reactor dependencies.
+
+    Provides an alternative (better) way of handling configuration,
+    since IDE features for editing
+    """
+
+    def __init__(self, dictionary: Dict = None):
+        if dictionary is not None:
+            self.__dict__ = dictionary
+
+        self._pipework = None  # type: Pipework
+        self._auxiliaryFlags = {}  # type: Dict[str, bool]
+
+    def peek(self, name: str):
+        """
+        Fetches a config parameter without registering a reactor dependency.
+        Meant for backward compatibility and edge cases, mark parameters as auxiliary instead.
+
+        :param name:
+        :return:
+        """
+        self._throw_if_doesnt_exist(name)
+
+        return object.__getattribute__(self, name)
+
+    def mark_auxiliary(self, params: List[str]):
+        """
+            @see PyPlant.mark_auxiliary
+        """
+        for name in params:
+            self._throw_if_doesnt_exist(name)
+            self._auxiliaryFlags[name] = True
+
+    def is_auxiliary(self, name: str) -> bool:
+        return name in self._auxiliaryFlags and self._auxiliaryFlags[name]
+
+    def _clone_with_pipe(self, pipe: 'Pipework') -> 'ConfigBase':
+        clone = copy.copy(self)
+        clone._pipework = pipe
+
+        return clone
+
+    def __getattribute__(self, name: str):
+        # Important to first check for the underscore to avoid recursion.
+        if name.startswith('_') or name in ['peek', 'mark_auxiliary', 'is_auxiliary']:
+            return object.__getattribute__(self, name)
+
+        self._throw_if_doesnt_exist(name)
+
+        if not self.is_auxiliary(name) and self._pipework is not None:
+            self._pipework.register_config_param(name)
+
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name, value):
+        if not name.startswith('_') and self._pipework is not None:
+            raise RuntimeError("Editing configs from reactors is not allowed. "
+                               "(Tried to change the '{}' parameter.)".format(name))
+
+        object.__setattr__(self, name, value)
+
+    def _throw_if_doesnt_exist(self, name):
+        if name not in self.__dict__:
+            raise RuntimeError("The config parameter '{}' does not exist.".format(name))
+
+
+# noinspection PyProtectedMember
 class Pipework:
     """
     Used by reactors to send and receive ingredients.
@@ -657,6 +731,7 @@ class Pipework:
         self.warehouse = warehouse
         self.connectedReactor = connectedReactor  # Which reactor this pipework is connected to.
         self.logger = logger
+        self.config = plant.get_config_object()._clone_with_pipe(self)
 
     def receive(self, name) -> Any:
         self.logger.debug("Reactor '{}' is requesting ingredient '{}'".format(self.connectedReactor.name, name))
@@ -704,9 +779,19 @@ class Pipework:
         return self.warehouse.allocate_temp(ingredient, **kwargs)
 
     def read_config(self, paramName: str) -> Any:
+        """
+        This method is for backward compatibility, the config object should be used instead.
+        :param paramName:
+        :return:
+        """
+        self.register_config_param(paramName)
+
+        return self.plant._peek_config_param(paramName)
+
+    def register_config_param(self, paramName):
         self.connectedReactor.register_parameter(paramName)
 
-        return self.plant.get_config_param(paramName)
+        pass
 
     def read_config_unregistered(self, paramName: str) -> Any:
         """
@@ -716,7 +801,7 @@ class Pipework:
         :param paramName:
         :return:
         """
-        return self.plant.get_config_param(paramName)
+        return self.plant._peek_config_param(paramName)
 
     def _register_output(self, name, type):
         ingredient = self._create_ingredient(name, type)
@@ -735,7 +820,7 @@ class Pipework:
 
 class Reactor:
 
-    def __init__(self, name: str, func: Callable[[Pipework], None]):
+    def __init__(self, name: str, func: Callable[['Pipework', 'ConfigBase'], 'Generator']):
 
         # Whether the current reactor version was executed in the past.
         # If it was, we know that we can trust the metadata (inputs, outputs, etc.).
@@ -764,6 +849,22 @@ class Reactor:
     def get_params(self):
         return self.params
 
+    def func_exists(self) -> bool:
+        """
+        The function may not exist, if the reactor object was loaded from disk,
+        but the corresponding reactor function was removed from the code.
+        :return:
+        """
+        return self.func is not None
+
+    def run_func(self, pipe: 'Pipework', config: 'ConfigBase') -> Generator:
+        if len(inspect.signature(self.func).parameters) == 2:
+            return self.func(pipe, config)
+        else:
+            # For backward compatibility: support reactors that don't accept a config object.
+            # noinspection PyArgumentList
+            return self.func(pipe)
+
     def register_parameter(self, name):
         if 'params' not in self.__dict__:
             self.params = {name}
@@ -777,7 +878,7 @@ class Reactor:
             self.inputs.add(name)
 
     def register_output(self, name):
-        #todo can't remember why this check is needed.
+        # todo can't remember why this check is needed.
         if 'outputs' not in self.__dict__:
             self.outputs = {name}
         else:
@@ -1057,6 +1158,7 @@ class Warehouse:
     def _get_huge_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.hdf')
 
+    # noinspection PyUnusedLocal
     def _store_huge_array(self, name, value: h5py.Dataset):
         # H5py takes care of storing to disk on-the-fly.
         # Just flush the data, to make sure that it is persisted.

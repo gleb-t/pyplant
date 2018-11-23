@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import os
 import inspect
-from typing import Callable
+from typing import Callable, Dict
 
 import logging
 
@@ -13,6 +13,7 @@ import numpy as np
 from pyplant import *
 
 
+# noinspection PyCompatibility
 class PyPlantTest(unittest.TestCase):
 
     # Used for invalidating reactor hashes in a deterministic way.
@@ -210,6 +211,57 @@ class PyPlantTest(unittest.TestCase):
         for name, trueVal in ingredients.items():
             self.assertEqual(trueVal, received[name])
             self.assertEqual(type(trueVal), type(received[name]))
+
+    def test_config_object(self):
+
+        class Config(ConfigBase):
+
+            def __init__(self):
+                # noinspection PyCompatibility
+                super().__init__({})
+
+                self.paramA = 1
+                self.paramB = 'asd'
+                self.paramC = (1, 2)
+
+        @ReactorFunc
+        def producer(pipe: Pipework, config: Config):
+
+            paramA = config.paramA
+            paramB = config.paramB
+
+            pipe.send('ingredient', 1, Ingredient.Type.simple)
+
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework, config: Config):
+
+            paramC = config.paramC
+
+            ingredient = yield pipe.receive('ingredient')  # type: int
+            self.assertEqual(ingredient, 1)
+
+            yield
+
+        config = Config()
+        self._construct_plant(config, [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+
+        config.paramC = (2, 3)
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+
+        config.paramA = 2
+        self._reconstruct_plant(config)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
+
 
     def test_huge_arrays(self):
 
