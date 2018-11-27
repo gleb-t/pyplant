@@ -692,13 +692,15 @@ class ConfigBase:
     def is_auxiliary(self, name: str) -> bool:
         return name in self._auxiliaryFlags and self._auxiliaryFlags[name]
 
-    def _clone_with_pipe(self, pipe: 'Pipework') -> 'ConfigBase':
-        clone = copy.copy(self)
-        clone._pipework = pipe
+    def _getattribute_method(self, name: str):
+        """
+        A hack to improve PyCharm experience.
 
-        return clone
+        Gets assigned to be the __get_attribute__ magic method in the module's __init__ file.
+        We don't override it explicitly to hide this fact from PyCharm.
+        If PyCharm sees a __getattribute__ method, it stops showing missing field warnings.
+        """
 
-    def __getattribute__(self, name: str):
         # Important to first check for the underscore to avoid recursion.
         if name.startswith('_') or name in ['peek', 'has', 'mark_auxiliary', 'is_auxiliary']:
             return object.__getattribute__(self, name)
@@ -710,12 +712,18 @@ class ConfigBase:
 
         return object.__getattribute__(self, name)
 
-    def __setattr__(self, name, value):
+    def _setattr_method(self, name, value):
         if not name.startswith('_') and self._pipework is not None:
             raise RuntimeError("Editing configs from reactors is not allowed. "
                                "(Tried to change the '{}' parameter.)".format(name))
 
         object.__setattr__(self, name, value)
+
+    def _clone_with_pipe(self, pipe: 'Pipework') -> 'ConfigBase':
+        clone = copy.copy(self)
+        clone._pipework = pipe
+
+        return clone
 
     def _throw_if_doesnt_exist(self, name):
         if name not in self.__dict__:
