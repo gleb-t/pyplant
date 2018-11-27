@@ -364,7 +364,7 @@ class Plant:
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
         try:
             parameterStrings = ['{}_{}'.format(name, self.config.peek(name)) for name in sorted(reactor.get_params())
-                                if not self.config.is_auxiliary(name)]
+                                if not self.config.is_auxiliary(name) and self.config.has(name)]
             parameterSignature = self.stringHash(''.join(parameterStrings))
         except KeyError as e:
             self.logger.info("Couldn't compute signature for ingredient '{}' because parameter '{}' is missing."
@@ -678,6 +678,9 @@ class ConfigBase:
 
         return object.__getattribute__(self, name)
 
+    def has(self, paramName: str) -> bool:
+        return paramName in self.__dict__
+
     def mark_auxiliary(self, params: List[str]):
         """
             @see PyPlant.mark_auxiliary
@@ -697,7 +700,7 @@ class ConfigBase:
 
     def __getattribute__(self, name: str):
         # Important to first check for the underscore to avoid recursion.
-        if name.startswith('_') or name in ['peek', 'mark_auxiliary', 'is_auxiliary']:
+        if name.startswith('_') or name in ['peek', 'has', 'mark_auxiliary', 'is_auxiliary']:
             return object.__getattribute__(self, name)
 
         self._throw_if_doesnt_exist(name)
