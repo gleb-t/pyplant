@@ -212,6 +212,42 @@ class PyPlantTest(unittest.TestCase):
             self.assertEqual(trueVal, received[name])
             self.assertEqual(type(trueVal), type(received[name]))
 
+    def test_file_ingredients(self):
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            filepathA = pipe.allocate('file-a', Ingredient.Type.file)
+            filepathB = pipe.allocate('file-b', Ingredient.Type.file)
+
+            with open(filepathA, 'w') as file:
+                file.write('test-string-a')
+            pipe.send('file-a', filepathA, Ingredient.Type.file)
+
+            with open(filepathB, 'w') as file:
+                file.write('test-string-b')
+            pipe.send('file-b', filepathB, Ingredient.Type.file)
+
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+            filepathA = yield pipe.receive('file-a')
+            filepathB = yield pipe.receive('file-b')
+
+            with open(filepathA, 'r') as file:
+                self.assertEqual('test-string-a', file.readline())
+                self.assertEqual('', file.readline())
+            with open(filepathB, 'r') as file:
+                self.assertEqual('test-string-b', file.readline())
+                self.assertEqual('', file.readline())
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        self._reconstruct_plant({})
+        self.plant.run_reactor(consumer)
+
+
     def test_config_object(self):
 
         class Config(ConfigBase):

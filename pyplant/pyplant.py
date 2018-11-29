@@ -937,7 +937,8 @@ class Ingredient:
         array = 3,
         huge_array = 4,
         object = 5,
-        keras_model = 6
+        keras_model = 6,
+        file = 7
 
     def __init__(self, name: str):
         self.name = name
@@ -1028,6 +1029,8 @@ class Warehouse:
             return self._fetch_object(name)
         elif type == Ingredient.Type.keras_model:
             return self._fetch_keras_model(name)
+        elif type == Ingredient.Type.file:
+            return self._fetch_file(name)
         else:
             raise RuntimeError("This should never happen! Unsupported ingredient type: {}".format(type))
 
@@ -1053,6 +1056,8 @@ class Warehouse:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.keras_model:
             self._store_keras_model(ingredient.name, value)
+        elif ingredient.type == Ingredient.Type.file:
+            self._store_file(ingredient.name, value)
         else:
             raise RuntimeError("Unsupported ingredient type: {}".format(ingredient.type))
 
@@ -1066,10 +1071,12 @@ class Warehouse:
 
     def allocate(self, ingredient: Ingredient, **kwargs):
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type != Ingredient.Type.huge_array:
+        if ingredient.type == Ingredient.Type.huge_array:
+            return self._allocate_huge_array(ingredient.name, **kwargs)
+        elif ingredient.type == Ingredient.Type.file:
+            return self._allocate_file(ingredient.name, **kwargs)
+        else:
             raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
-
-        return self._allocate_huge_array(ingredient.name, **kwargs)
 
     def allocate_temp(self, ingredient: Ingredient, **kwargs):
         """
@@ -1217,6 +1224,31 @@ class Warehouse:
             return keras.models.load_model(modelPath)
 
         return None
+
+    def _allocate_file(self, name, **kwargs) -> str:
+        # Create an empty file, clear if it already exists.
+        filepath = self._get_filepath_from_name(name)
+        open(filepath, 'w').close()
+
+        return filepath
+
+    def _store_file(self, name: str, value):
+        expectedPath = self._get_filepath_from_name(name)
+        if value != expectedPath:
+            raise RuntimeError("Moving file ingredients is not allowed. Expected value: {}".format(expectedPath))
+
+        # Don't have to do anything here, the filesystem takes care of the files.
+        pass
+
+    def _fetch_file(self, name: str) -> Union[str, None]:
+        filepath = self._get_filepath_from_name(name)
+        if os.path.exists(filepath):
+            return filepath
+
+        return None
+
+    def _get_filepath_from_name(self, fileName: str) -> str:
+        return os.path.join(self.baseDir, 'file_{}'.format(fileName))
 
     def _save_manifest(self):
         manifestPath = os.path.join(self.baseDir, 'manifest.pyplant.pcl')
