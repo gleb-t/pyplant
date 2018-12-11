@@ -8,7 +8,7 @@ import inspect
 import hashlib
 import logging
 import warnings
-from typing import Callable, Any, Dict, Generator, Union, List, Tuple
+from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type
 from enum import Enum
 from types import SimpleNamespace
 
@@ -99,6 +99,10 @@ def SubreactorFunc(func):
 
 
 class Plant:
+
+    # todo This a horrible hack which requires the users of PyPlant to provide a reference to the BNA constructor
+    # todo We should pull BNAs into a separate package and have PyPlant rely on it. But I don't have time for it now.
+    bnaConstructor = None  # type: Callable[[str, Warehouse.IBufferedArray.FileMode, Tuple, Type], Warehouse.IBufferedArray]
 
     class EventType(Enum):
         unknown = 0,
@@ -938,7 +942,8 @@ class Ingredient:
         huge_array = 4,
         object = 5,
         keras_model = 6,
-        file = 7
+        file = 7,
+        buffered_array = 8
 
     def __init__(self, name: str):
         self.name = name
@@ -969,11 +974,54 @@ class Ingredient:
 
 class Warehouse:
 
+    class IBufferedArray:
+        # todo pull BNAs into a package so we can use that type directly and avoid copy-paste
+
+        class FileMode(Enum):
+            """
+            The integer value must be identical to the C++ implementation.
+            """
+            unknown = 0
+            readonly = 1
+            update = 2
+            rewrite = 3
+
+        def __init__(self, filepath: str, fileMode: FileMode, shape: Tuple,
+                     dtype: np.dtype, maxBufferSize: int):
+            self.filepath = filepath
+            self.fileMode = fileMode
+            self.dtype = dtype  # type: np.dtype
+            self.ndim = len(shape)
+            self.shape = shape
+            self.maxBufferSize = maxBufferSize
+            self.cPointer = 0
+
+            raise RuntimeError("This class is an interface and shouldn't be instantiated.")
+
+        def __enter__(self):
+            pass
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def read_slice(self, index: int) -> np.ndarray:
+            pass
+
+        def destroy(self):
+            pass
+
+        def flush(self, flushOsBuffer: bool = False):
+            pass
+
+        def fill_box(self, value, cornerLow: Tuple, cornerHigh: Tuple):
+            pass
+
     def __init__(self, baseDir, logger: logging.Logger):
         self.baseDir = baseDir
         self.cache = {}
         self.simpleStore = {}
         self.h5Files = {}  # type: Dict[str, h5py.File]
+        self.bufferedArrays = {}  # type: Dict[str, Warehouse.IBufferedArray]
         self.logger = logger
 
         manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
@@ -1017,6 +1065,7 @@ class Warehouse:
 
         self.logger.debug("Fetching the ingredient from disk.")
         type = self.manifest[name]['type']
+        meta = self.manifest[name]['metadata']
         if type == Ingredient.Type.simple:
             return self._fetch_simple(name)
         elif type == Ingredient.Type.list:
@@ -1031,6 +1080,8 @@ class Warehouse:
             return self._fetch_keras_model(name)
         elif type == Ingredient.Type.file:
             return self._fetch_file(name)
+        elif type == Ingredient.Type.buffered_array:
+            return self._fetch_buffered_array(name, meta)
         else:
             raise RuntimeError("This should never happen! Unsupported ingredient type: {}".format(type))
 
@@ -1044,6 +1095,7 @@ class Warehouse:
             self.logger.debug("Ingredient is already in the warehouse, pruning.")
             self._prune(ingredient.name, ingredient.type)
 
+        metadata = {}
         if ingredient.type == Ingredient.Type.simple:
             self._store_simple(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.list:
@@ -1058,12 +1110,15 @@ class Warehouse:
             self._store_keras_model(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.file:
             self._store_file(ingredient.name, value)
+        elif ingredient.type == Ingredient.Type.buffered_array:
+            metadata = self._store_buffered_array(ingredient.name, value)
         else:
             raise RuntimeError("Unsupported ingredient type: {}".format(ingredient.type))
 
         self.manifest[ingredient.name] = {
             'signature': ingredient.signature,
-            'type': ingredient.type
+            'type': ingredient.type,
+            'metadata': metadata
         }
         self._save_manifest()
 
@@ -1075,6 +1130,8 @@ class Warehouse:
             return self._allocate_huge_array(ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.file:
             return self._allocate_file(ingredient.name, **kwargs)
+        elif ingredient.type == Ingredient.Type.buffered_array:
+            return self._allocate_buffered_array(ingredient.name, **kwargs)
         else:
             raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
@@ -1143,6 +1200,8 @@ class Warehouse:
         dataset = self._fetch_huge_array(name)
         h5FilePath = self._get_huge_array_filepath(name)
 
+        # todo should probably always recreate the array, its cheap and consistent with BNAs.
+
         # If the dataset already exists, but has a wrong shape/type, recreate it.
         if dataset is not None and (dataset.shape != shape or dataset.dtype != dtype):
             try:
@@ -1175,6 +1234,9 @@ class Warehouse:
 
     def _get_huge_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.hdf')
+
+    def _get_buffered_array_filepath(self, name):
+        return os.path.join(self.baseDir, name + '.bna')
 
     # noinspection PyUnusedLocal
     def _store_huge_array(self, name, value: h5py.Dataset):
@@ -1247,6 +1309,64 @@ class Warehouse:
 
         return None
 
+    def _allocate_buffered_array(self, name, shape, dtype=np.float, **kwargs):
+        if not Plant.bnaConstructor:
+            raise RuntimeError("BNA constructor (class) needs to be provided to PyPlant.")
+
+        filepath = self._get_buffered_array_filepath(name)
+        # metadata = self.manifest[name]['metadata']
+
+        if name in self.bufferedArrays:
+            raise RuntimeError("Cannot allocate buffered array '{}', it's already opened!")
+
+        # For BNAs, we simple recreate the file if it already exists.
+        # If the array already exists, but has a wrong shape/type, recreate it.
+        if os.path.exists(filepath):
+            self.logger.debug("Found BNA '{}' on disk while allocating. Recreating the file.")
+            try:
+                os.remove(filepath)
+            except RuntimeError as e:
+                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
+                                    .format(name, e))
+
+        self.bufferedArrays[name] = Plant.bnaConstructor(filepath, Warehouse.IBufferedArray.FileMode.rewrite,
+                                                         shape, dtype, **kwargs)
+        return self.bufferedArrays[name]
+
+    def _store_buffered_array(self, name, value: 'Warehouse.IBufferedArray') -> Dict[str, Any]:
+        # Just flush the data, to make sure that it is persisted.
+        self.bufferedArrays[name].flush(flushOsBuffer=True)
+        metadata = {
+            'shape': value.shape,
+            'dtype_str': value.dtype.str,
+            'buffer_size': value.maxBufferSize
+        }
+
+        return metadata
+
+    def _fetch_buffered_array(self, name: str, metadata: Dict[str, Any]):
+        if not Plant.bnaConstructor:
+            raise RuntimeError("BNA constructor (class) needs to be provided to PyPlant.")
+
+        filepath = self._get_buffered_array_filepath(name)
+        if name not in self.bufferedArrays:
+            if not os.path.exists(filepath):
+                return None
+
+            # If the array isn't in the manifest, but exists on disk, attempt to open it.
+            try:
+                self.bufferedArrays[name] = Plant.bnaConstructor(filepath, Warehouse.IBufferedArray.FileMode.update,
+                                                                 metadata['shape'], np.dtype(metadata['dtype_str']),
+                                                                 metadata['buffer_size'])
+            except OSError as e:
+                self.logger.warning("Failed to open the buffered array at '{}' with error: {}"
+                                    .format(filepath, str(e)))
+                self.logger.info("Deleting the corrupted file.")
+                os.remove(filepath)
+                return None
+
+        return self.bufferedArrays[name]
+
     def _get_filepath_from_name(self, fileName: str) -> str:
         return os.path.join(self.baseDir, 'file_{}'.format(fileName))
 
@@ -1259,6 +1379,9 @@ class Warehouse:
         for name, h5File in list(self.h5Files.items()):
             h5File.close()
             del self.h5Files[name]
+
+        for bna in self.bufferedArrays.values():
+            bna.destroy()
 
         self._save_manifest()
 
