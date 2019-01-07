@@ -1261,17 +1261,26 @@ class Warehouse:
                 os.remove(h5FilePath)
                 return None
 
-        if 'data' not in self.h5Files[name]:
+        dataset = None
+        try:
+            if 'data' in self.h5Files[name]:
+                # Try accessing the dataset. (Can crush for corrupted files.)
+                dataset = self.h5Files[name]['data']
+        except BaseException as e:
+            self.logger.warning("Suppressed an error while accessing HDF-dataset '{}' Details: {}"
+                                .format(name, e))
+
+        if dataset is None:
             self.logger.info("The HDF file at '{}' has no dataset. Corrupted file, deleting.".format(h5FilePath))
             try:
                 self.h5Files[name].close()
                 os.remove(h5FilePath)
-            except RuntimeError as e:
-                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
+            except BaseException as e:
+                self.logger.warning("Suppressed an error while removing HDF-dataset '{}' Details: {}"
                                     .format(name, e))
             return None
 
-        return self.h5Files[name]['data']
+        return dataset
 
     def _store_keras_model(self, name, value):
 
@@ -1322,7 +1331,7 @@ class Warehouse:
         # For BNAs, we simple recreate the file if it already exists.
         # If the array already exists, but has a wrong shape/type, recreate it.
         if os.path.exists(filepath):
-            self.logger.debug("Found BNA '{}' on disk while allocating. Recreating the file.")
+            self.logger.debug("Found BNA '{}' on disk while allocating. Recreating the file.".format(name))
             try:
                 os.remove(filepath)
             except RuntimeError as e:
