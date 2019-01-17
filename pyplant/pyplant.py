@@ -1007,7 +1007,7 @@ class Warehouse:
         def read_slice(self, index: int) -> np.ndarray:
             pass
 
-        def destroy(self):
+        def destruct(self):
             pass
 
         def flush(self, flushOsBuffer: bool = False):
@@ -1390,7 +1390,7 @@ class Warehouse:
             del self.h5Files[name]
 
         for bna in self.bufferedArrays.values():
-            bna.destroy()
+            bna.destruct()
 
         self._save_manifest()
 
