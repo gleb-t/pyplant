@@ -570,6 +570,8 @@ class Plant:
         # Save the current cache, so the results of this reactor
         # are safe from the potential future crashes of reactors that follow.
         self._save_cache()
+        # Do the same for the warehouse, making sure that the new signatures made it to disk.
+        self.warehouse.save_manifest()
 
     def _get_next_reactor_to_update(self) -> RunningReactor:
         """
@@ -766,6 +768,8 @@ class Pipework:
             ingredientValue = self._warehouse.fetch(name, None)
         elif isSignatureKnown:
             ingredientValue = self._warehouse.fetch(name, signature)
+        else:
+            self._logger.debug("Ingredient '{}' signature is not known.".format(name))
 
         if ingredientValue is None:
             return Plant.IngredientAwaitedCommand(name)
@@ -1120,7 +1124,7 @@ class Warehouse:
             'type': ingredient.type,
             'metadata': metadata
         }
-        self._save_manifest()
+        self.save_manifest()
 
         self.cache[ingredient.name] = value
 
@@ -1379,7 +1383,7 @@ class Warehouse:
     def _get_filepath_from_name(self, fileName: str) -> str:
         return os.path.join(self.baseDir, 'file_{}'.format(fileName))
 
-    def _save_manifest(self):
+    def save_manifest(self):
         manifestPath = os.path.join(self.baseDir, 'manifest.pyplant.pcl')
         with open(manifestPath, 'wb') as file:
             pickle.dump(self.manifest, file)
@@ -1392,7 +1396,7 @@ class Warehouse:
         for bna in self.bufferedArrays.values():
             bna.destruct()
 
-        self._save_manifest()
+        self.save_manifest()
 
         # Explicitly clear the cache. This immediately deallocates NumPy arrays, instead of waiting for GC.
         for name in list(self.cache.keys()):
