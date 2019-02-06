@@ -1147,17 +1147,21 @@ class Warehouse:
         :return:
         """
         self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type != Ingredient.Type.huge_array:
-            raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
-
-        return self._allocate_huge_array('temp_' + ingredient.name, **kwargs)
+        if ingredient.type == Ingredient.Type.huge_array:
+            return self._allocate_huge_array('temp_' + ingredient.name, **kwargs)
+        elif ingredient.type == Ingredient.Type.buffered_array:
+            return self._allocate_buffered_array('temp_' + ingredient.name, **kwargs)
+        else:
+            raise RuntimeError("Temp allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
-        if ingredient.type != Ingredient.Type.huge_array:
+        if ingredient.type == Ingredient.Type.huge_array:
+            return self._deallocate_huge_array('temp_' + ingredient.name)
+        elif ingredient.type == Ingredient.Type.buffered_array:
+            return self._deallocate_buffered_array('temp_' + ingredient.name)
+        else:
             raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
-
-        return self._deallocate_huge_array('temp_' + ingredient.name)
 
     def sign_fresh_ingredient(self, ingredientName: str, signature: str):
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
@@ -1345,6 +1349,20 @@ class Warehouse:
         self.bufferedArrays[name] = Plant.bnaConstructor(filepath, Warehouse.IBufferedArray.FileMode.rewrite,
                                                          shape, dtype, **kwargs)
         return self.bufferedArrays[name]
+
+    def _deallocate_buffered_array(self, name):
+        bnaFilepath = self._get_buffered_array_filepath(name)
+
+        if name not in self.bufferedArrays:
+            raise RuntimeError("Cannot deallocate buffered array '{}', it doesn't exist.".format(name))
+
+        if not os.path.exists(bnaFilepath):
+            raise RuntimeError("Cannot deallocate buffered array '{}', the file doesn't exist: '{}'."
+                               .format(name, bnaFilepath))
+
+        self.bufferedArrays[name].destruct()
+        del self.bufferedArrays[name]
+        os.unlink(bnaFilepath)
 
     def _store_buffered_array(self, name, value: 'Warehouse.IBufferedArray') -> Dict[str, Any]:
         # Just flush the data, to make sure that it is persisted.
