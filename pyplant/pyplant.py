@@ -300,7 +300,7 @@ class Plant:
         if isinstance(config, ConfigBase):
             self.config = config
         else:
-            self.config = ConfigBase(dictionary=config)
+            self.config = ConfigBase(dictionary=config.copy())
 
     def mark_params_as_auxiliary(self, params: List[str]):
         """
