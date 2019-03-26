@@ -1334,7 +1334,7 @@ class Warehouse:
         # metadata = self.manifest[name]['metadata']
 
         if name in self.bufferedArrays:
-            raise RuntimeError("Cannot allocate buffered array '{}', it's already opened!")
+            raise RuntimeError("Cannot allocate buffered array '{}', it's already opened!".format(name))
 
         # For BNAs, we simple recreate the file if it already exists.
         # If the array already exists, but has a wrong shape/type, recreate it.
