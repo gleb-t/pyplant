@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import h5py
 
-__all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'Pipework', 'Ingredient']
+__all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'ConfigValue', 'Pipework', 'Ingredient']
 
 
 # Random documentation:
@@ -367,7 +367,7 @@ class Plant:
 
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
         try:
-            parameterStrings = ['{}_{}'.format(name, self.config.peek(name)) for name in sorted(reactor.get_params())
+            parameterStrings = ['{}_{!r}'.format(name, self.config.peek(name)) for name in sorted(reactor.get_params())
                                 if not self.config.is_auxiliary(name) and self.config.has(name)]
             parameterSignature = self.stringHash(''.join(parameterStrings))
         except KeyError as e:
@@ -734,6 +734,18 @@ class ConfigBase:
     def _throw_if_doesnt_exist(self, name):
         if name not in self.__dict__:
             raise RuntimeError("The config parameter '{}' does not exist.".format(name))
+
+
+class ConfigValue:
+    """
+    A base class for POD-style objects used as values in a Plant's config. (see ConfigBase)
+    Implements proper string representation to support hashing by the plant.
+    Also used as a marker by some external code to know when to expand placeholders
+    in the object's fields.
+    """
+
+    def __repr__(self):
+        return "{}: {}".format(self.__class__, self.__dict__)
 
 
 # noinspection PyProtectedMember
