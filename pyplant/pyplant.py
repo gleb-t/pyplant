@@ -51,6 +51,11 @@ def ReactorFunc(func):
     if not inspect.isgeneratorfunction(func):
         raise RuntimeError("ReactorFunc '{}' is not a generator function!".format(func.__name__))
 
+    # Store the function globally, needed for implementing a convenience 'add all reactors' function,
+    # that adds all visible reactors to a plant, without having to enumerate them manually.
+    # noinspection PyProtectedMember
+    Plant._ReactorFunctions.append(func)
+
     return func
 
 
@@ -108,6 +113,9 @@ class Plant:
         unknown = 0,
         reactor_started = 1,
         subreactor_started = 2,
+
+    # Global store of reactor functions, needed for the implementation of convenience function 'add all reactors'.
+    _ReactorFunctions = []
 
     # Global store of current sub-reactor functions.
     # Filled out during code importing through function augmentors.
@@ -217,6 +225,9 @@ class Plant:
                 'reactors': self.reactors,
                 'ingredients': self.ingredients
             }, file)
+
+    def add_all_visible_reactors(self):
+        self.add_reactors(*Plant._ReactorFunctions)
 
     def add_reactors(self, *args):
         for func in args:
