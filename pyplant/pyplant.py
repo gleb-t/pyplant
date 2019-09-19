@@ -113,6 +113,9 @@ class Plant:
         unknown = 0,
         reactor_started = 1,
         subreactor_started = 2,
+        reactor_finished = 3,
+        subreactor_finished = 4,  # Not implemented yet.
+        reactor_step = 5
 
     # Global store of reactor functions, needed for the implementation of convenience function 'add all reactors'.
     _ReactorFunctions = []
@@ -506,7 +509,9 @@ class Plant:
                 timeBefore = time.time()
                 try:
                     returnedObject = nextReactor.generator.send(valueToSend)  # Execute a step of the reactor
-                    nextReactor.totalRunTime += time.time() - timeBefore  # Track time spend in execution.
+                    nextReactor.totalRunTime += time.time() - timeBefore  # Track the time spent in execution.
+                    self._trigger_event(Plant.EventType.reactor_step, (nextReactor.name,))
+
                     if type(returnedObject) is Plant.IngredientAwaitedCommand:
                         # A missing ingredient is was requested, will pause the reactor.
                         nextReactor.awaitedIngredient = returnedObject.ingredientName
@@ -583,6 +588,9 @@ class Plant:
         self._save_cache()
         # Do the same for the warehouse, making sure that the new signatures made it to disk.
         self.warehouse.save_manifest()
+
+        # Dispatch the event, now that all the relevant information is gathered and saved.
+        self._trigger_event(Plant.EventType.reactor_finished, (finishedReactor.name, ))
 
     def _get_next_reactor_to_update(self) -> RunningReactor:
         """
