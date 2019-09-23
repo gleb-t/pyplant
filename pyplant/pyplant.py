@@ -1057,6 +1057,7 @@ class Warehouse:
         self.simpleStore = {}
         self.h5Files = {}  # type: Dict[str, h5py.File]
         self.bufferedArrays = {}  # type: Dict[str, Warehouse.IBufferedArray]
+        self.customKerasLayers = {}  # type: Dict[str, Any]
         self.logger = logger
 
         manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
@@ -1203,6 +1204,9 @@ class Warehouse:
         # Store the new signature.
         self.manifest[ingredientName]['signature'] = signature
 
+    def set_custom_keras_layers(self, customLayers: Dict[str, Any]):
+        self.customKerasLayers = customLayers
+
     def _prune(self, name: str, type: Ingredient.Type):
         pass  # We are overwriting on store, for now there's no need for explicit pruning.
 
@@ -1331,7 +1335,7 @@ class Warehouse:
 
         modelPath = os.path.join(self.baseDir, '{}.keras'.format(name))
         if os.path.exists(modelPath):
-            return keras.models.load_model(modelPath)
+            return keras.models.load_model(modelPath, custom_objects=self.customKerasLayers)
 
         return None
 
