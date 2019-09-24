@@ -43,13 +43,11 @@ def _compute_string_hash(string: str) -> str:
 
 
 def ReactorFunc(func):
+    # todo We should allow functions without this decorator to be added as reactors. It's not essential anymore.
     assert('pyplant' not in func.__dict__)
 
     func.pyplant = SimpleNamespace()
     func.pyplant.isReactor = True
-
-    if not inspect.isgeneratorfunction(func):
-        raise RuntimeError("ReactorFunc '{}' is not a generator function!".format(func.__name__))
 
     # Store the function globally, needed for implementing a convenience 'add all reactors' function,
     # that adds all visible reactors to a plant, without having to enumerate them manually.
@@ -468,7 +466,7 @@ class Plant:
         self.executionHistory[reactorObject.name] = Plant.ExecutionRecord(reactorObject.name)
 
         # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
-        generator = reactorObject.run_func(pipework, pipework.config)
+        generator = reactorObject.start_func(pipework, pipework.config)
         if not inspect.isgenerator(generator):
             raise RuntimeError("Reactor '{}' is not a generator function!".format(reactorObject.name))
 
@@ -907,13 +905,23 @@ class Reactor:
         """
         return self.func is not None
 
-    def run_func(self, pipe: 'Pipework', config: 'ConfigBase') -> Generator:
+    def start_func(self, pipe: 'Pipework', config: 'ConfigBase') -> Generator:
         if len(inspect.signature(self.func).parameters) == 2:
-            return self.func(pipe, config)
+            args = (pipe, config)
         else:
             # For backward compatibility: support reactors that don't accept a config object.
             # noinspection PyArgumentList
-            return self.func(pipe)
+            args = (pipe, )
+
+        if inspect.isgeneratorfunction(self.func):
+            return self.func(*args)
+        else:
+            # Support reactors that are not generators by wrapping them in one.
+            def _generator_wrapper():
+                self.func(*args)
+                yield
+
+            return _generator_wrapper()
 
     def register_parameter(self, name):
         if 'params' not in self.__dict__:

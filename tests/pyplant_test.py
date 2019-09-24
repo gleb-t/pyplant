@@ -592,6 +592,32 @@ class PyPlantTest(unittest.TestCase):
 
         self.assertEqual(self.startedReactors, ['reactor_b'])  # No need to rerun reactor_a.
 
+    def test_non_generator_reactor(self):
+
+        nonGenRun = False
+        genRun = False
+
+        @ReactorFunc
+        def non_generator(pipe: Pipework, config):
+            nonlocal nonGenRun
+            nonGenRun = True
+
+            pipe.send('x', 5, Ingredient.Type.simple)
+
+        @ReactorFunc
+        def generator(pipe: Pipework, config):
+            x = yield pipe.receive('x')
+            self.assertEqual(x, 5)
+
+            nonlocal genRun
+            genRun = True
+
+        self._construct_plant(ConfigBase(), [non_generator, generator])
+        self.plant.run_reactor(generator)
+
+        self.assertTrue(nonGenRun)
+        self.assertTrue(genRun)
+
 
 class PyPlantWarehouseTest(unittest.TestCase):
 
