@@ -467,8 +467,6 @@ class Plant:
 
         # Reactors are generator functions. Obtain a generator object (also executes until the first 'yield').
         generator = reactorObject.start_func(pipework, pipework.config)
-        if not inspect.isgenerator(generator):
-            raise RuntimeError("Reactor '{}' is not a generator function!".format(reactorObject.name))
 
         # Save the generator object for further execution.
         runningReactor.generator = generator
@@ -613,7 +611,8 @@ class Plant:
             for reactor in self.reactors.values():
                 if not reactor.wasRun and not self._is_reactor_running(reactor.name):
                     nextReactor = self._start_reactor(reactor)
-                    break
+                    if nextReactor is not None:  # Might be None if failed to start.
+                        break
 
         if nextReactor is None:
             debugDump = "Running reactors: {} \n".format(self.runningReactors.keys())
