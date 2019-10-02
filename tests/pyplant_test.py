@@ -618,6 +618,27 @@ class PyPlantTest(unittest.TestCase):
         self.assertTrue(nonGenRun)
         self.assertTrue(genRun)
 
+    def test_non_generator_subreactor(self):
+
+        nonGenRun = False
+
+        @SubreactorFunc
+        def non_generator(arg1):
+            nonlocal nonGenRun
+            nonGenRun = True
+
+            return arg1 * 2
+
+        @ReactorFunc
+        def reactor(pipe: Pipework, config):
+            x = yield from non_generator(10)
+            self.assertEqual(x, 20)
+
+        self._construct_plant(ConfigBase(), [reactor])
+        self.plant.run_reactor(reactor)
+
+        self.assertTrue(nonGenRun)
+
 
 class PyPlantWarehouseTest(unittest.TestCase):
 

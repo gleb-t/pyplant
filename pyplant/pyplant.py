@@ -82,9 +82,6 @@ def SubreactorFunc(func):
 
     name = func.__name__
 
-    if not inspect.isgeneratorfunction(func):
-        raise RuntimeError("SubreactorFunc '{}' is not a generator function!".format(name))
-
     # Store the current function globally. Will be needed for reactor signature computation.
     # noinspection PyProtectedMember
     Plant._SubreactorFunctions[name] = func
@@ -93,8 +90,13 @@ def SubreactorFunc(func):
     def _pyplant_subreactor_wrapper(*args, **kwargs):
         # Notify the plant, that a subreactor is being called.
         yield Plant.SubreactorStartedCommand(name)
-        # Delegate to the  subreactor, as if the reactor was running/yielding.
-        result = yield from func(*args, **kwargs)
+        # Delegate to the subreactor, as if the reactor was running/yielding.
+        if inspect.isgeneratorfunction(func):
+            result = yield from func(*args, **kwargs)
+        else:
+            # If not a generator, simply call the function.
+            result = func(*args, **kwargs)
+
         # Propagate the returned value to the caller
         return result
 
