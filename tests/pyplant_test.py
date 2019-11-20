@@ -303,16 +303,16 @@ class PyPlantTest(unittest.TestCase):
 
         @ReactorFunc
         def producer(pipe: Pipework):
-            array1 = pipe.allocate('array1', Ingredient.Type.huge_array,
+            array1 = pipe.allocate('array1', Ingredient.Type.hdf_array,
                                    shape=(4, 5, 6, 7), dtype=np.uint8)
-            array2 = pipe.allocate('array2', Ingredient.Type.huge_array,
+            array2 = pipe.allocate('array2', Ingredient.Type.hdf_array,
                                    shape=(3, 500), dtype=np.bool)
 
             array1[:, 3, 4, :] = 42
             array2[2, :250] = True
 
-            pipe.send('array1', array1, Ingredient.Type.huge_array)
-            pipe.send('array2', array2, Ingredient.Type.huge_array)
+            pipe.send('array1', array1, Ingredient.Type.hdf_array)
+            pipe.send('array2', array2, Ingredient.Type.hdf_array)
 
             yield
 
@@ -651,7 +651,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
             'simple': (Ingredient.Type.simple, 'Value1'),
             'object': (Ingredient.Type.object, slice(1, 10, 2)),
             'array': (Ingredient.Type.array, np.ones(10, dtype=np.int32)),
-            'huge_array': (Ingredient.Type.huge_array, np.ones(10, dtype=np.int32)),
+            'huge_array': (Ingredient.Type.hdf_array, np.ones(10, dtype=np.int32)),
         }
 
         self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
@@ -661,7 +661,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
             ingredient.type = type
             ingredient.set_current_signature('initialSignature')
 
-            if ingredient.type == Ingredient.Type.huge_array:
+            if ingredient.type == Ingredient.Type.hdf_array:
                 value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
 
             self.warehouse.store(ingredient, value)
@@ -675,7 +675,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
     def _assert_equal(self, type: Ingredient.Type, valA, valB, msg=None):
         if type == Ingredient.Type.simple or type == Ingredient.Type.object:
             self.assertEqual(valA, valB, msg=msg)
-        elif type == Ingredient.Type.array or type == Ingredient.Type.huge_array:
+        elif type == Ingredient.Type.array or type == Ingredient.Type.hdf_array:
             self.assertTrue(np.all(np.equal(valA[...], valB[...])))
         else:
             raise RuntimeError("Unsupported ingredient type: '{}'".format(type))
@@ -707,7 +707,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
             ingredient.type = type
             ingredient.set_current_signature('changedSignature')
 
-            if ingredient.type == Ingredient.Type.huge_array:
+            if ingredient.type == Ingredient.Type.hdf_array:
                 value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
 
             self.warehouse.store(ingredient, value)
@@ -723,7 +723,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
             ingredient.type = type
             ingredient.set_current_signature('changedSignature')
 
-            if ingredient.type == Ingredient.Type.huge_array:
+            if ingredient.type == Ingredient.Type.hdf_array:
                 value = self.warehouse.allocate(ingredient, shape=(10, 10), dtype=np.int32)
 
             with self.assertRaises(RuntimeError):
@@ -732,7 +732,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
     def test_graceful_overwrite_on_corrupted_hdf_files(self):
         # Store a new huge array ingredient.
         ingredient = Ingredient('test-dataset')
-        ingredient.type = Ingredient.Type.huge_array
+        ingredient.type = Ingredient.Type.hdf_array
 
         dataset = self.warehouse.allocate(ingredient, shape=(300, 20, 20), dtype=np.float32)
         dataset[100:200] = 66

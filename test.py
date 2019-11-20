@@ -48,11 +48,11 @@ def reactor_d(pipe: Pipework):
 
 @ReactorFunc
 def reactor_huge_array(pipe: Pipework):
-    array = pipe.allocate('huge_array', Ingredient.Type.huge_array, shape=(100, 255, 255))
+    array = pipe.allocate('huge_array', Ingredient.Type.hdf_array, shape=(100, 255, 255))
     array[...] = 1.0
     array[:50, ...] = 0.0
 
-    pipe.send('huge_array', array, Ingredient.Type.huge_array)
+    pipe.send('huge_array', array, Ingredient.Type.hdf_array)
 
     yield
 

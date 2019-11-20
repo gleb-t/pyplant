@@ -983,7 +983,7 @@ class Ingredient:
         simple = 1,
         list = 2,
         array = 3,
-        huge_array = 4,
+        hdf_array = 4,
         object = 5,
         keras_model = 6,
         file = 7,
@@ -1117,7 +1117,7 @@ class Warehouse:
             return self._fetch_object(name)
         elif type == Ingredient.Type.array:
             return self._fetch_array(name)
-        elif type == Ingredient.Type.huge_array:
+        elif type == Ingredient.Type.hdf_array:
             return self._fetch_huge_array(name)
         elif type == Ingredient.Type.object:
             return self._fetch_object(name)
@@ -1147,7 +1147,7 @@ class Warehouse:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.array:
             self._store_array(ingredient.name, value)
-        elif ingredient.type == Ingredient.Type.huge_array:
+        elif ingredient.type == Ingredient.Type.hdf_array:
             self._store_huge_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.object:
             self._store_object(ingredient.name, value)
@@ -1171,7 +1171,7 @@ class Warehouse:
 
     def allocate(self, ingredient: Ingredient, **kwargs):
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.huge_array:
+        if ingredient.type == Ingredient.Type.hdf_array:
             return self._allocate_huge_array(ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.file:
             return self._allocate_file(ingredient.name, **kwargs)
@@ -1188,7 +1188,7 @@ class Warehouse:
         :return:
         """
         self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.huge_array:
+        if ingredient.type == Ingredient.Type.hdf_array:
             return self._allocate_huge_array('temp_' + ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.buffered_array:
             return self._allocate_buffered_array('temp_' + ingredient.name, **kwargs)
@@ -1197,7 +1197,7 @@ class Warehouse:
 
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.huge_array:
+        if ingredient.type == Ingredient.Type.hdf_array:
             return self._deallocate_huge_array('temp_' + ingredient.name)
         elif ingredient.type == Ingredient.Type.buffered_array:
             return self._deallocate_buffered_array('temp_' + ingredient.name)
