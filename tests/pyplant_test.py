@@ -639,6 +639,17 @@ class PyPlantTest(unittest.TestCase):
 
         self.assertTrue(nonGenRun)
 
+    def test_reactors_added_automatically(self):
+
+        @ReactorFunc
+        def reactor(pipe):
+            pass
+
+        self._construct_plant(ConfigBase())
+        self.plant.run_reactor(reactor)
+
+        self.assertEqual(self.startedReactors, ['reactor'])
+
 
 class PyPlantWarehouseTest(unittest.TestCase):
 

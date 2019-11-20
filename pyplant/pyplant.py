@@ -278,6 +278,13 @@ class Plant:
         else:
             reactorName = reactorToRun
 
+        # Be nice: if no reactors were added at all, try to add them automatically.
+        if len(self.reactors) == 0:
+            self.add_all_visible_reactors()
+
+        if reactorName not in self.reactors:
+            raise ValueError("Couldn't find reactor '{}'. Was it added to the plant?".format(reactorName))
+
         assert(reactorName in self.reactors)  # All reactors must be added to the plant.
         reactorObject = self.reactors[reactorName]
 
