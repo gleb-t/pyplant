@@ -524,8 +524,8 @@ class Plant:
                     elif type(returnedObject) is Plant.SubreactorStartedCommand:
                         # A sub-reactor is being launched. Remember the dependency and continue execution.
                         subreactorName = returnedObject.subreactorName
-                        self.logger.info("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name,
-                                                                                            subreactorName))
+                        self.logger.debug("Reactor '{}' is starting subreactor '{}'.".format(nextReactor.name,
+                                                                                             subreactorName))
                         nextReactor.reactorObject.register_subreactor(subreactorName)
                         self._trigger_event(Plant.EventType.subreactor_started, (subreactorName,))
                     else:
