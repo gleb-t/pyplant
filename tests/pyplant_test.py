@@ -7,7 +7,6 @@ from typing import Callable, Dict
 
 import logging
 
-import h5py
 import numpy as np
 
 from pyplant import *
@@ -750,7 +749,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
         self.warehouse.store(ingredient, dataset)
 
         self.warehouse.close()
-        hdfFilePath = self.warehouse._get_huge_array_filepath('test-dataset')
+        hdfFilePath = self.warehouse._get_hdf_array_filepath('test-dataset')
         with open(hdfFilePath, mode='wb') as file:
             file.write(bytearray([255] * 300))
 

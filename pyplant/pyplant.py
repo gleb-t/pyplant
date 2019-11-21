@@ -8,12 +8,14 @@ import inspect
 import hashlib
 import logging
 import warnings
-from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type
+from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, TYPE_CHECKING
 from enum import Enum
 from types import SimpleNamespace
 
 import numpy as np
-import h5py
+if TYPE_CHECKING:
+    # H5py is used for dealing with HDF arrays, but it's only an optional dependency.
+    import h5py
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'ConfigValue', 'Pipework', 'Ingredient']
 
@@ -1125,7 +1127,7 @@ class Warehouse:
         elif type == Ingredient.Type.array:
             return self._fetch_array(name)
         elif type == Ingredient.Type.hdf_array:
-            return self._fetch_huge_array(name)
+            return self._fetch_hdf_array(name)
         elif type == Ingredient.Type.object:
             return self._fetch_object(name)
         elif type == Ingredient.Type.keras_model:
@@ -1155,7 +1157,7 @@ class Warehouse:
         elif ingredient.type == Ingredient.Type.array:
             self._store_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.hdf_array:
-            self._store_huge_array(ingredient.name, value)
+            self._store_hdf_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.object:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.keras_model:
@@ -1179,7 +1181,7 @@ class Warehouse:
     def allocate(self, ingredient: Ingredient, **kwargs):
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
         if ingredient.type == Ingredient.Type.hdf_array:
-            return self._allocate_huge_array(ingredient.name, **kwargs)
+            return self._allocate_hdf_array(ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.file:
             return self._allocate_file(ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.buffered_array:
@@ -1196,7 +1198,7 @@ class Warehouse:
         """
         self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
         if ingredient.type == Ingredient.Type.hdf_array:
-            return self._allocate_huge_array('temp_' + ingredient.name, **kwargs)
+            return self._allocate_hdf_array('temp_' + ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.buffered_array:
             return self._allocate_buffered_array('temp_' + ingredient.name, **kwargs)
         else:
@@ -1205,7 +1207,7 @@ class Warehouse:
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
         if ingredient.type == Ingredient.Type.hdf_array:
-            return self._deallocate_huge_array('temp_' + ingredient.name)
+            return self._deallocate_hdf_array('temp_' + ingredient.name)
         elif ingredient.type == Ingredient.Type.buffered_array:
             return self._deallocate_buffered_array('temp_' + ingredient.name)
         else:
@@ -1255,9 +1257,11 @@ class Warehouse:
     def _fetch_array(self, name):
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)), allow_pickle=False)
 
-    def _allocate_huge_array(self, name, shape, dtype=np.float, **kwargs):
-        dataset = self._fetch_huge_array(name)
-        h5FilePath = self._get_huge_array_filepath(name)
+    def _allocate_hdf_array(self, name, shape, dtype=np.float, **kwargs):
+        import h5py
+
+        dataset = self._fetch_hdf_array(name)
+        h5FilePath = self._get_hdf_array_filepath(name)
 
         # todo should probably always recreate the array, its cheap and consistent with BNAs.
 
@@ -1277,35 +1281,37 @@ class Warehouse:
 
         return dataset
 
-    def _deallocate_huge_array(self, name):
-        h5FilePath = self._get_huge_array_filepath(name)
+    def _deallocate_hdf_array(self, name):
+        h5FilePath = self._get_hdf_array_filepath(name)
 
         if name not in self.h5Files:
-            raise RuntimeError("Cannot deallocate huge array '{}', it doesn't exist.".format(name))
+            raise RuntimeError("Cannot deallocate HDF array '{}', it doesn't exist.".format(name))
 
         if not os.path.exists(h5FilePath):
-            raise RuntimeError("Cannot deallocate huge array '{}', the file doesn't exist: '{}'."
+            raise RuntimeError("Cannot deallocate HDF array '{}', the file doesn't exist: '{}'."
                                .format(name, h5FilePath))
 
         self.h5Files[name].close()
         del self.h5Files[name]
         os.unlink(h5FilePath)
 
-    def _get_huge_array_filepath(self, name):
+    def _get_hdf_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.hdf')
 
     def _get_buffered_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.bna')
 
     # noinspection PyUnusedLocal
-    def _store_huge_array(self, name, value: h5py.Dataset):
+    def _store_hdf_array(self, name, value: 'h5py.Dataset'):
         # H5py takes care of storing to disk on-the-fly.
         # Just flush the data, to make sure that it is persisted.
         self.h5Files[name].flush()
         pass
 
-    def _fetch_huge_array(self, name):
-        h5FilePath = self._get_huge_array_filepath(name)
+    def _fetch_hdf_array(self, name):
+        import h5py
+
+        h5FilePath = self._get_hdf_array_filepath(name)
         if name not in self.h5Files:
             if not os.path.exists(h5FilePath):
                 return None
