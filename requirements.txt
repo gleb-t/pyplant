@@ -1,0 +1,3 @@
+dateutils
+h5py
+numpy
