@@ -758,3 +758,19 @@ class PyPlantWarehouseTest(unittest.TestCase):
 
         self.assertIsNone(dataset)
         self.assertFalse(os.path.exists(hdfFilePath))
+
+    def test_corrupted_pickle_store_doesnt_crash(self):
+        # Store a basic ingredient.
+        ingredient = Ingredient('test')
+        ingredient.type = Ingredient.Type.simple
+
+        self.warehouse.store(ingredient, 42)
+        self.warehouse.close()
+
+        # Mess up the file store.
+        with open(self.warehouse.simpleStorePath, 'w+') as file:
+            file.write('nonsense')
+
+        # This shouldn't throw an exception and the ingredient should be gone.
+        self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
+        self.assertIsNone(self.warehouse.fetch('test'))

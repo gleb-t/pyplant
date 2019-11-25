@@ -1077,20 +1077,22 @@ class Warehouse:
         self.bufferedArrays = {}  # type: Dict[str, Warehouse.IBufferedArray]
         self.customKerasLayers = {}  # type: Dict[str, Any]
         self.logger = logger
+        self.manifest = {}
 
-        manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
-        if os.path.exists(manifestPath):
-            with open(manifestPath, 'rb') as file:
-                self.manifest = pickle.load(file)
-        else:
-            self.manifest = {}
+        try:
+            manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
+            if os.path.exists(manifestPath):
+                with open(manifestPath, 'rb') as file:
+                    self.manifest = pickle.load(file)
 
-        simpleStorePath = os.path.join(os.path.join(self.baseDir, 'simple.pyplant.pcl'))
-        if os.path.exists(simpleStorePath):
-            with open(simpleStorePath, 'rb') as file:
-                self.simpleStore = pickle.load(file)
-        else:
-            self.simpleStore = {}
+            self.simpleStorePath = os.path.join(os.path.join(self.baseDir, 'simple.pyplant.pcl'))
+            if os.path.exists(self.simpleStorePath):
+                with open(self.simpleStorePath, 'rb') as file:
+                    self.simpleStore = pickle.load(file)
+            else:
+                self.simpleStore = {}
+        except pickle.UnpicklingError as e:
+            self.logger.warning("Failed to load the warehouse state. Corrupted files?", exc_info=True)
 
     def fetch(self, name: str, signature: str = None) -> Any:
         """
@@ -1230,7 +1232,7 @@ class Warehouse:
 
     def _store_simple(self, name, value):
         self.simpleStore[name] = value
-        with open(os.path.join(self.baseDir, 'simple.pyplant.pcl'), 'wb') as file:
+        with open(self.simpleStorePath, 'wb') as file:
             pickle.dump(self.simpleStore, file)
 
     def _fetch_simple(self, name):
