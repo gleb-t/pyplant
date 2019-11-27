@@ -1,8 +1,10 @@
 # PyPlant
 > Out-of-core function pipelines
 
-[![Build Status](https://travis-ci.com/gleb-t/pyplant.svg?branch=master)](https://travis-ci.com/gleb-t/pyplant)
 [![PyPI version](https://badge.fury.io/py/pyplant.svg)](https://badge.fury.io/py/pyplant)
+[![Build Status](https://travis-ci.com/gleb-t/pyplant.svg?branch=master)](https://travis-ci.com/gleb-t/pyplant)
+[![codecov](https://codecov.io/gh/gleb-t/pyplant/branch/master/graph/badge.svg)](https://codecov.io/gh/gleb-t/pyplant)
+
 
 ## Introduction
 PyPlant's goal is to simplify writing data processing pipelines. 
