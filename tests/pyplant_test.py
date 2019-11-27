@@ -3,13 +3,17 @@ import shutil
 import tempfile
 import os
 import inspect
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 import logging
 
 import numpy as np
 
 from pyplant import *
+
+
+class DummyClass:
+    pass
 
 
 # noinspection PyCompatibility
@@ -677,6 +681,60 @@ class PyPlantTest(unittest.TestCase):
         self.plant.run_reactor(reactor)
 
         self.assertEqual(self.startedReactors, ['reactor'])
+
+    def test_ingredient_type_inference(self):
+        import keras
+
+        modelWeights = None  # type: Optional[np.ndarray]
+
+        @ReactorFunc
+        def producer(pipe: Pipework, config):
+            # Send various ingredients without specifying their type.
+
+            pipe.send('simple', 5)
+            pipe.send('list', ['a', 'b', 'c'])
+            pipe.send('array', np.arange(0, 100))
+
+            hdfArray = pipe.allocate('hdf-array', Ingredient.Type.hdf_array, shape=(100,), dtype=np.float32)
+            hdfArray[...] = np.arange(0, 100)
+            pipe.send('hdf-array', hdfArray)
+
+            obj = DummyClass()
+            obj.__dict__ = {'a': 1, 'b': 2}
+            pipe.send('object', obj)
+
+            model = keras.models.Sequential()
+            model.add(keras.layers.Dense(100, activation='relu', input_shape=(10,)))
+            model.compile(keras.optimizers.SGD(), loss='mse')
+            nonlocal modelWeights
+            modelWeights = model.get_weights()[0]
+            pipe.send('keras-model', model)
+
+        @ReactorFunc
+        def consumer(pipe: Pipework, config):
+            simple = yield pipe.receive('simple')
+            self.assertEqual(simple, 5)
+
+            lst = yield pipe.receive('list')
+            self.assertEqual(lst, ['a', 'b', 'c'])
+
+            array = yield pipe.receive('array')
+            np.testing.assert_array_equal(array, np.arange(0, 100))
+
+            hdfArray = yield pipe.receive('hdf-array')
+            np.testing.assert_array_equal(hdfArray[...], np.arange(0, 100))
+
+            obj = yield pipe.receive('object')
+            self.assertTrue(isinstance(obj, DummyClass))
+            self.assertEqual(obj.__dict__, {'a': 1, 'b': 2})
+
+            model = yield pipe.receive('keras-model')  # type: keras.models.Model
+            np.testing.assert_array_equal(model.get_weights()[0], modelWeights)
+
+        self._construct_plant(ConfigBase(), [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        pass
 
 
 class PyPlantWarehouseTest(unittest.TestCase):

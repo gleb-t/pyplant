@@ -8,7 +8,7 @@ import inspect
 import hashlib
 import logging
 import warnings
-from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, TYPE_CHECKING
+from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, Optional, TYPE_CHECKING
 from enum import Enum
 from types import SimpleNamespace
 
@@ -815,8 +815,11 @@ class Pipework:
 
         return ingredientValue
 
-    def send(self, name: str, value: Any, type: 'Ingredient.Type'):
+    def send(self, name: str, value: Any, type: Optional['Ingredient.Type'] = None):
         self._logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self._connectedReactor.name, name))
+
+        if type is None:
+            type = Ingredient.infer_type_from_value(value)
 
         ingredient = self._register_output(name, type)
         self._warehouse.store(ingredient, value)
@@ -997,6 +1000,37 @@ class Ingredient:
         keras_model = 6,
         file = 7,
         buffered_array = 8
+
+    @classmethod
+    def infer_type_from_value(cls, value) -> 'Ingredient.Type':
+        """
+        Infer the ingredient storage type from the provided object.
+        """
+
+        # Wrap some of the type checks into local functions,
+        # so we call 'import' only after we know that the module is loaded.
+        # Cleaner, than checking by type name and supports inheritance.
+        def _is_h5py_dataset(val):
+            import h5py
+            return isinstance(val, h5py.Dataset)
+
+        def _is_keras_model(val):
+            import keras
+            return isinstance(val, keras.models.Model)
+
+        valueType = type(value)
+        if valueType in [int, float, complex, str, bool]:
+            return Ingredient.Type.simple
+        elif valueType is list:
+            return Ingredient.Type.list
+        elif valueType is np.ndarray:
+            return Ingredient.Type.array
+        elif 'h5py' in sys.modules and _is_h5py_dataset(value):
+            return Ingredient.Type.hdf_array
+        elif 'keras' in sys.modules and _is_keras_model(value):
+            return Ingredient.Type.keras_model
+        else:
+            return Ingredient.Type.object
 
     def __init__(self, name: str):
         self.name = name
