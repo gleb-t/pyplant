@@ -246,7 +246,6 @@ class PyPlantTest(unittest.TestCase):
         self._reconstruct_plant({})
         self.plant.run_reactor(consumer)
 
-
     def test_config_object(self):
 
         class Config(ConfigBase):
@@ -297,8 +296,7 @@ class PyPlantTest(unittest.TestCase):
         self.plant.run_reactor(consumer)
         self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
 
-
-    def test_huge_arrays(self):
+    def test_hdf_arrays(self):
 
         @ReactorFunc
         def producer(pipe: Pipework):
@@ -342,7 +340,38 @@ class PyPlantTest(unittest.TestCase):
         self._reconstruct_plant({})
         self.plant.run_reactor(consumer)
 
-        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+        self.assertEqual(self.startedReactors, ['consumer'],
+                         msg='The producer should be cached.')
+
+    def test_keras_models(self):
+        import keras
+
+        weights = None
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            m = keras.models.Sequential()
+            m.add(keras.layers.Dense(100, activation='relu', input_shape=(10,)))
+
+            m.compile(keras.optimizers.SGD(), loss='mse')
+
+            nonlocal weights
+            weights = m.get_weights()[0]
+
+            pipe.send('model', m, Ingredient.Type.keras_model)
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+            m = yield pipe.receive('model')  # type: keras.models.Sequential
+
+            loadedWeights = m.get_weights()[0]
+            np.testing.assert_array_equal(loadedWeights, weights)
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.run_reactor(consumer)
+
+        self._reconstruct_plant({})
+        self.plant.run_reactor(consumer)
 
     def test_subreactors_basic(self):
         config = {'param-a': 1, 'param-b': 2}
