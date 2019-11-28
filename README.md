@@ -21,7 +21,7 @@ from pyplant import *
 def load_data(pipe):
     data = expensive_operation()
     
-    pipe.send('data', data, Ingredient.Type.array)
+    pipe.send('data', data)
 
 @ReactorFunc
 def plot_data(pipe, config):
@@ -112,8 +112,9 @@ Ingredients are the data/objects that are sent and received by the reactors.
 PyPlant tracks ingredient dependencies to schedule reactor execution.
 To receive an ingredient use `ingredient = yield pipe.receive('name')`.
 The yield keyword is there to pause the reactor execution in case the ingredient is not yet ready.
-When an ingredient is sent to the plant, note that its type has to be provided, affecting how it will be serialized and stored:
-`pipe.send('name', ingredient, Ingredient.Type.object)`
+When an ingredient is sent to the plant, note that an ingredient type can be provided, affecting how it will be serialized and stored:
+`pipe.send('name', ingredient, Ingredient.Type.object)`. 
+PyPlant will infer the appropriate type in most cases, but you can manually set if necessary.
 
 
 Here are the possible types:
