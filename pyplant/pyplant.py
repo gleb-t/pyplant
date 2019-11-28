@@ -281,7 +281,9 @@ class Plant:
             reactorName = reactorToRun
 
         # Be nice: if no reactors were added at all, try to add them automatically.
-        if len(self.reactors) == 0:
+        # To check if the reactor was added, check if the function is known.
+        if len([r for r in self.reactors.values() if r.func_exists()]) == 0:
+            self.logger.debug("No reactors were added, will try to add them automatically.")
             self.add_all_visible_reactors()
 
         if reactorName not in self.reactors:

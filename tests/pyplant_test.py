@@ -67,17 +67,45 @@ class PyPlantTest(unittest.TestCase):
 
         return self.plant
 
-    def _reconstruct_plant(self, config):
+    def _reconstruct_plant(self, config, addReactors: bool = True):
         reactors = self.plant.get_reactors()
         self._shutdown_plant()
         self.startedReactors = []
         self.startedSubreactors = []
 
         self._construct_plant(config)
-        self.plant.add_reactors(*tuple(reactors))
+        if addReactors:
+            self.plant.add_reactors(*tuple(reactors))
 
     def _shutdown_plant(self):
         self.plant.shutdown()
+
+    def test_reactors_basic(self):
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            pipe.send('a', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            a = yield pipe.receive('a')
+            pipe.send('b', a * 2, Ingredient.Type.simple)
+
+        @ReactorFunc
+        def reactor_c(pipe: Pipework):
+            b = yield pipe.receive('b')
+            self.assertEqual(b, 2)
+
+        self._construct_plant({}, [reactor_a, reactor_b, reactor_c])
+        self.plant.run_reactor(reactor_c)
+        # All reactors should have been started. Order is not important.
+        self.assertSetEqual(set(self.startedReactors), {'reactor_c', 'reactor_b', 'reactor_a'})
+
+        self._reconstruct_plant({})
+
+        self.plant.run_reactor(reactor_c)
+        # The first two reactors shouldn't re-run.
+        self.assertEqual(self.startedReactors, ['reactor_c'])
 
     def test_events(self):
         # We rely on events working to perform other tests.
@@ -712,13 +740,30 @@ class PyPlantTest(unittest.TestCase):
     def test_reactors_added_automatically(self):
 
         @ReactorFunc
-        def reactor(pipe):
-            pass
+        def reactor_a(pipe: Pipework):
+            pipe.send('a', 1, Ingredient.Type.simple)
+            yield
 
-        self._construct_plant(ConfigBase())
-        self.plant.run_reactor(reactor)
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            a = yield pipe.receive('a')
+            pipe.send('b', a * 2, Ingredient.Type.simple)
 
-        self.assertEqual(self.startedReactors, ['reactor'])
+        @ReactorFunc
+        def reactor_c(pipe: Pipework):
+            b = yield pipe.receive('b')
+            self.assertEqual(b, 2)
+
+        self._construct_plant({})
+        self.plant.run_reactor(reactor_c)
+        # All reactors should have been started. Order is not important.
+        self.assertSetEqual(set(self.startedReactors), {'reactor_c', 'reactor_b', 'reactor_a'})
+
+        self._reconstruct_plant({}, addReactors=False)
+
+        self.plant.run_reactor(reactor_c)
+        # The first two reactors shouldn't re-run.
+        self.assertEqual(self.startedReactors, ['reactor_c'])
 
     def test_ingredient_type_inference(self):
         import keras
