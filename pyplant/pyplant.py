@@ -200,6 +200,14 @@ class Plant:
                 self.reactors = plantCache['reactors']  # type: Dict[str, Reactor]
                 self.ingredients = plantCache['ingredients']
 
+    @staticmethod
+    def _clear_global_state():
+        """
+        This method should only be called during unit testing, e.g. to test auto-adding reactors.
+        """
+        Plant._SubreactorFunctions = {}
+        Plant._ReactorFunctions = []
+
     def _setup_logger(self, logLevel, logger):
         self.logger = logger
         if logger is None:

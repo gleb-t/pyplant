@@ -40,6 +40,8 @@ class PyPlantTest(unittest.TestCase):
 
         self._shutdown_plant()
         shutil.rmtree(self.plantDir)
+        # Important for testing some convenience functionality that relies on static fields.
+        Plant._clear_global_state()
 
     def _compute_function_hash(self, func: Callable) -> str:
         name = func.__name__
