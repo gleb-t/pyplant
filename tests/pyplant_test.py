@@ -624,6 +624,44 @@ class PyPlantTest(unittest.TestCase):
 
         self.assertEqual(self.startedReactors, ['reactor_b'])  # No need to rerun reactor_a.
 
+    def test_reactor_rerun_on_crash(self):
+
+        isFirstRun = True
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            pipe.send('a', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            a = yield pipe.receive('a')
+
+            nonlocal isFirstRun
+            if isFirstRun:
+                isFirstRun = False
+                raise RuntimeError("Testing crash behavior.")
+
+            pipe.send('b', 2, Ingredient.Type.simple)
+
+        @ReactorFunc
+        def reactor_c(pipe: Pipework):
+            b = yield pipe.receive('b')
+            yield
+
+        self._construct_plant({}, [reactor_a, reactor_b, reactor_c])
+        with self.assertRaises(RuntimeError):
+            self.plant.run_reactor(reactor_c)
+
+        # All reactors should have been started. Order is not important.
+        self.assertSetEqual(set(self.startedReactors), {'reactor_c', 'reactor_b', 'reactor_a'})
+
+        self._reconstruct_plant({})
+
+        self.plant.run_reactor(reactor_c)
+        # The plant should finish successfully now, 'reactor_a' should've not re-ran.
+        self.assertEqual(self.startedReactors, ['reactor_c', 'reactor_b'])
+
     def test_non_generator_reactor(self):
 
         nonGenRun = False

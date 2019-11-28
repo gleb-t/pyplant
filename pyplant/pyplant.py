@@ -258,8 +258,8 @@ class Plant:
                 self._compute_reactor_signature(name)
 
                 if self.reactors[name].signature != oldSignature:
-                    self.logger.info("Reactor '{}' signature changed to '{}'. Metadata marked as outdated."
-                                     .format(name, self.reactors[name].signature))
+                    self.logger.info("Reactor '{}' signature changed to '{}' from '{}'. Metadata marked as outdated."
+                                     .format(name, self.reactors[name].signature, oldSignature))
                     self.reactors[name].wasRun = False  # This new version was never executed.
                 else:
                     self.logger.debug("Reactor did not change.")
