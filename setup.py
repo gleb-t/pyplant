@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='pyplant',
-      version='0.4.0',
+      version='0.4.1',
       description='Python function pipeline',
       license='MIT',
       author='gleb-t',
