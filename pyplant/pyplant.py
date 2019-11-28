@@ -1288,10 +1288,10 @@ class Warehouse:
         return None
 
     def _store_array(self, name, value: np.ndarray):
-        np.save(os.path.join(self.baseDir, '{}.npy'.format(name)), value, allow_pickle=False)
+        np.save(os.path.join(self.baseDir, '{}.npy'.format(name)), value)
 
     def _fetch_array(self, name):
-        return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)), allow_pickle=False)
+        return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)))
 
     def _allocate_hdf_array(self, name, shape, dtype=np.float, **kwargs):
         import h5py
