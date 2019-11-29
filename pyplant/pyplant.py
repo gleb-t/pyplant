@@ -13,7 +13,6 @@ from enum import Enum
 from types import SimpleNamespace
 
 import numpy as np
-import scipy.sparse as sp
 if TYPE_CHECKING:
     # H5py is used for dealing with HDF arrays, but it's only an optional dependency.
     import h5py
@@ -1031,6 +1030,7 @@ class Ingredient:
             return isinstance(val, keras.models.Model)
 
         def _is_scipy_sparse(val):
+            import scipy.sparse as sp
             return sp.issparse(val)
 
         valueType = type(value)
@@ -1315,12 +1315,14 @@ class Warehouse:
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)))
 
     def _store_scipy_sparse(self, name, value):
-        sp.save_npz(os.path.join(self.baseDir,\
-            '{}.npz'.format(name)), value)
+        import scipy.sparse as sp
+
+        sp.save_npz(os.path.join(self.baseDir, '{}.npz'.format(name)), value)
 
     def _fetch_scipy_sparse(self, name):
-        return sp.load_npz(os.path.join(self.baseDir,\
-            '{}.npz'.format(name)))
+        import scipy.sparse as sp
+
+        return sp.load_npz(os.path.join(self.baseDir, '{}.npz'.format(name)))
 
     def _allocate_hdf_array(self, name, shape, dtype=np.float, **kwargs):
         import h5py

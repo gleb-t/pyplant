@@ -337,16 +337,15 @@ class PyPlantTest(unittest.TestCase):
         def producer(pipe: Pipework):
             eye = sp.eye(12)
             pipe.send('eye', eye, Ingredient.Type.scipy_sparse)
-            yield
 
         @ReactorFunc
         def consumer(pipe: Pipework):
             eye = yield pipe.receive('eye')
-            eye_receive = eye.todense()
-            eye_test = sp.eye(12).todense()
-            self.assertTrue(np.all(eye_receive.todense() == eye_test.todense()))
-            yield
 
+            np.testing.assert_array_equal(eye.todense(), sp.eye(12).todense())
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.run_reactor(consumer)
 
     def test_hdf_arrays(self):
 
