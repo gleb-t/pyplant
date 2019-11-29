@@ -13,6 +13,7 @@ from enum import Enum
 from types import SimpleNamespace
 
 import numpy as np
+import scipy.sparse as sp
 if TYPE_CHECKING:
     # H5py is used for dealing with HDF arrays, but it's only an optional dependency.
     import h5py
@@ -1009,7 +1010,8 @@ class Ingredient:
         object = 5,
         keras_model = 6,
         file = 7,
-        buffered_array = 8
+        buffered_array = 8,
+        scipy_sparse = 9
 
     @classmethod
     def infer_type_from_value(cls, value) -> 'Ingredient.Type':
@@ -1028,6 +1030,9 @@ class Ingredient:
             import keras
             return isinstance(val, keras.models.Model)
 
+        def _is_scipy_sparse(val):
+            return sp.issparse(val)
+
         valueType = type(value)
         if valueType in [int, float, complex, str, bool]:
             return Ingredient.Type.simple
@@ -1035,6 +1040,8 @@ class Ingredient:
             return Ingredient.Type.list
         elif valueType is np.ndarray:
             return Ingredient.Type.array
+        elif 'scipy.sparse' in sys.modules and _is_scipy_sparse(value):
+            return Ingredient.Type.scipy_sparse
         elif 'h5py' in sys.modules and _is_h5py_dataset(value):
             return Ingredient.Type.hdf_array
         elif 'keras' in sys.modules and _is_keras_model(value):
@@ -1172,6 +1179,8 @@ class Warehouse:
             return self._fetch_object(name)
         elif type == Ingredient.Type.array:
             return self._fetch_array(name)
+        elif type == Ingredient.Type.scipy_sparse:
+            return self._fetch_scipy_sparse(name)
         elif type == Ingredient.Type.hdf_array:
             return self._fetch_hdf_array(name)
         elif type == Ingredient.Type.object:
@@ -1202,6 +1211,8 @@ class Warehouse:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.array:
             self._store_array(ingredient.name, value)
+        elif ingredient.type == Ingredient.Type.scipy_sparse:
+            self._store_scipy_sparse(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.hdf_array:
             self._store_hdf_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.object:
@@ -1302,6 +1313,14 @@ class Warehouse:
 
     def _fetch_array(self, name):
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)))
+
+    def _store_scipy_sparse(self, name, value):
+        sp.save_npz(os.path.join(self.baseDir,\
+            '{}.npz'.format(name)), value)
+
+    def _fetch_scipy_sparse(self, name):
+        return sp.load_npz(os.path.join(self.baseDir,\
+            '{}.npz'.format(name)))
 
     def _allocate_hdf_array(self, name, shape, dtype=np.float, **kwargs):
         import h5py

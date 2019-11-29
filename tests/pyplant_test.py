@@ -8,6 +8,7 @@ from typing import Callable, Dict, Optional
 import logging
 
 import numpy as np
+import scipy.sparse as sp
 
 from pyplant import *
 
@@ -329,6 +330,23 @@ class PyPlantTest(unittest.TestCase):
         self._reconstruct_plant(config)
         self.plant.run_reactor(consumer)
         self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
+
+    def test_scipy_sparse(self):
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            eye = sp.eye(12)
+            pipe.send('eye', eye, Ingredient.Type.scipy_sparse)
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+            eye = yield pipe.receive('eye')
+            eye_receive = eye.todense()
+            eye_test = sp.eye(12).todense()
+            self.assertTrue(np.all(eye_receive.todense() == eye_test.todense()))
+            yield
+
 
     def test_hdf_arrays(self):
 
