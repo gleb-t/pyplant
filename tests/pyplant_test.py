@@ -44,7 +44,11 @@ class PyPlantTest(unittest.TestCase):
         # Important for testing some convenience functionality that relies on static fields.
         Plant._clear_global_state()
 
-    def _compute_function_hash(self, func: Callable) -> str:
+    def _compute_test_function_hash(self, func: Callable) -> str:
+        """
+        A simple "hash" function use for source code hashing during unit testing.
+        Allows to mark arbitrary reactors as modified.
+        """
         name = func.__name__
         if name in self.modifiedReactors:
             PyPlantTest.uniqueReactorHashPostfix += 1
@@ -52,7 +56,7 @@ class PyPlantTest(unittest.TestCase):
 
         return name
 
-    def _construct_plant(self, config, reactors=None):
+    def _construct_plant(self, config, reactors=None, useTestFuncHash: bool = True):
 
         def _on_reactor_started(eventType, reactorName, reactorFunc=None):
             if eventType == Plant.EventType.reactor_started:
@@ -60,7 +64,12 @@ class PyPlantTest(unittest.TestCase):
             elif eventType == Plant.EventType.subreactor_started:
                 self.startedSubreactors.append(reactorName)
 
-        self.plant = Plant(self.plantDir, functionHash=self._compute_function_hash)
+        if useTestFuncHash:
+            # Be default use a special hash designed for easier testing.
+            self.plant = Plant(self.plantDir, functionHash=self._compute_test_function_hash)
+        else:
+            self.plant = Plant(self.plantDir)
+
         self.plant.__enter__()
         self.plant.add_event_listener(Plant.EventType.reactor_started, _on_reactor_started)
         self.plant.add_event_listener(Plant.EventType.subreactor_started, _on_reactor_started)
@@ -708,6 +717,43 @@ class PyPlantTest(unittest.TestCase):
         self.plant.run_reactor(reactor_c)
         # The plant should finish successfully now, 'reactor_a' should've not re-ran.
         self.assertEqual(self.startedReactors, ['reactor_c', 'reactor_b'])
+
+    def test_continue_after_wrong_producer_guess(self):
+        """
+        This test covers a specific bug, where a producer become a consumer of that ingredient
+        would cause the plant to loop indefinitely, because it would not update metadata correctly.
+        """
+
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            pipe.send('a', 1, Ingredient.Type.simple)
+            yield
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            a = yield pipe.receive('a')
+
+        # Use the standard hash, we're going to modify reactors manually by re-defining them.
+        self._construct_plant({}, [reactor_a, reactor_b], useTestFuncHash=False)
+        self.plant.run_reactor(reactor_b)
+        self.assertEqual(self.startedReactors, ['reactor_b', 'reactor_a'])
+
+        # Now, we swap the producer and consumer. The plant should update its metadata correctly.
+        @ReactorFunc
+        def reactor_a(pipe: Pipework):
+            a = yield pipe.receive('a')
+
+        @ReactorFunc
+        def reactor_b(pipe: Pipework):
+            pipe.send('a', 1, Ingredient.Type.simple)
+
+        self._shutdown_plant()
+        self._construct_plant({}, [reactor_a, reactor_b])
+        self.startedReactors = []
+        self.plant.run_reactor(reactor_a)
+
+        # Both reactors should run without crashes.
+        self.assertEqual(self.startedReactors, ['reactor_a', 'reactor_b'])
 
     def test_non_generator_reactor(self):
 

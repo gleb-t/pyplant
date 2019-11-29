@@ -163,8 +163,8 @@ class Plant:
             self.subreactorName = subreactorName
 
     def __init__(self, plantDir: str, logger: logging.Logger=None, logLevel: int=None,
-                 functionHash: Callable[[Callable], str]=_compute_function_hash,
-                 stringHash: Callable[[str], str]=_compute_string_hash):
+                 functionHash: Callable[[Callable], str] = _compute_function_hash,
+                 stringHash: Callable[[str], str] = _compute_string_hash):
         """
 
         :param plantDir:
@@ -463,7 +463,7 @@ class Plant:
 
         self._get_or_create_ingredient(ingredientName)
         reactor = self._get_producing_reactor(ingredientName)
-        if reactor is not None:
+        if reactor is not None and reactor.name not in self.executionHistory:
             self.logger.debug("Found the producing reactor '{}', scheduling.".format(reactor.name))
             self._start_reactor(reactor)
         else:
@@ -477,6 +477,9 @@ class Plant:
         if not reactorObject.func_exists():
             self.logger.info("Reactor '{}' was removed or renamed.".format(reactorObject.name))
             return None
+
+        # No reactor should be ran twice during a session.
+        assert reactorObject.name not in self.executionHistory
 
         # Each reactor needs a pipework to send and receive data.
         pipework = self._get_or_create_pipework(reactorObject)
