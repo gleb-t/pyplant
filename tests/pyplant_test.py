@@ -1,14 +1,11 @@
-import unittest
+import logging
+import os
 import shutil
 import tempfile
-import os
-import inspect
-from typing import Callable, Dict, Optional
-
-import logging
+import unittest
+from typing import Callable, Optional
 
 import numpy as np
-import scipy.sparse as sp
 
 from pyplant import *
 
@@ -341,6 +338,7 @@ class PyPlantTest(unittest.TestCase):
         self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
 
     def test_scipy_sparse(self):
+        import scipy.sparse as sp
 
         @ReactorFunc
         def producer(pipe: Pipework):
@@ -832,6 +830,7 @@ class PyPlantTest(unittest.TestCase):
 
     def test_ingredient_type_inference(self):
         import keras
+        import scipy.sparse as sp
 
         modelWeights = None  # type: Optional[np.ndarray]
 
@@ -858,6 +857,9 @@ class PyPlantTest(unittest.TestCase):
             modelWeights = model.get_weights()[0]
             pipe.send('keras-model', model)
 
+            sparse = sp.eye(12)
+            pipe.send('sparse', sparse)
+
         @ReactorFunc
         def consumer(pipe: Pipework, config):
             simple = yield pipe.receive('simple')
@@ -878,6 +880,9 @@ class PyPlantTest(unittest.TestCase):
 
             model = yield pipe.receive('keras-model')  # type: keras.models.Model
             np.testing.assert_array_equal(model.get_weights()[0], modelWeights)
+
+            sparse = yield pipe.receive('sparse')  # type: sp.spmatrix
+            np.testing.assert_array_equal(sparse.todense(), sp.eye(12).todense())
 
         self._construct_plant(ConfigBase(), [producer, consumer])
         self.plant.run_reactor(consumer)

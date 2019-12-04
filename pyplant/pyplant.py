@@ -1,21 +1,24 @@
-import time
 import copy
-from dateutil.relativedelta import relativedelta
-import os
-import sys
-import pickle
-import inspect
 import hashlib
+import inspect
 import logging
+import os
+import pickle
+import sys
+import time
 import warnings
-from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, Optional, TYPE_CHECKING
 from enum import Enum
 from types import SimpleNamespace
+from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, Optional, TYPE_CHECKING
 
 import numpy as np
+from dateutil.relativedelta import relativedelta
+
 if TYPE_CHECKING:
-    # H5py is used for dealing with HDF arrays, but it's only an optional dependency.
+    # These packages are needed to handle specific ingredient types, but they are only an optional dependency.
     import h5py
+    import keras
+    import scipy.sparse as sp
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'ConfigValue', 'Pipework', 'Ingredient']
 
@@ -1021,21 +1024,6 @@ class Ingredient:
         Infer the ingredient storage type from the provided object.
         """
 
-        # Wrap some of the type checks into local functions,
-        # so we call 'import' only after we know that the module is loaded.
-        # Cleaner, than checking by type name and supports inheritance.
-        def _is_h5py_dataset(val):
-            import h5py
-            return isinstance(val, h5py.Dataset)
-
-        def _is_keras_model(val):
-            import keras
-            return isinstance(val, keras.models.Model)
-
-        def _is_scipy_sparse(val):
-            import scipy.sparse as sp
-            return sp.issparse(val)
-
         valueType = type(value)
         if valueType in [int, float, complex, str, bool]:
             return Ingredient.Type.simple
@@ -1043,11 +1031,11 @@ class Ingredient:
             return Ingredient.Type.list
         elif valueType is np.ndarray:
             return Ingredient.Type.array
-        elif 'scipy.sparse' in sys.modules and _is_scipy_sparse(value):
+        elif 'scipy.sparse' in sys.modules and sys.modules['scipy.sparse'].issparse(value):
             return Ingredient.Type.scipy_sparse
-        elif 'h5py' in sys.modules and _is_h5py_dataset(value):
+        elif 'h5py' in sys.modules and isinstance(value, sys.modules['h5py'].Dataset):
             return Ingredient.Type.hdf_array
-        elif 'keras' in sys.modules and _is_keras_model(value):
+        elif 'keras' in sys.modules and isinstance(value, sys.modules['keras'].models.Model):
             return Ingredient.Type.keras_model
         else:
             return Ingredient.Type.object
