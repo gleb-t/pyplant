@@ -1,4 +1,4 @@
-from typing import Dict, Any, Callable
+from typing import *
 
 from pyplant import *
 
@@ -30,7 +30,10 @@ class PipeworkMock(Pipework):
     def read_config_unregistered(self, paramName: str) -> Any:
         return self.config[paramName]
 
-    def send(self, name: str, value: Any, type: 'Ingredient.Type'):
+    def register_config_param(self, paramName):
+        pass
+
+    def send(self, name: str, value: Any, type: Optional['Ingredient.Type'] = None):
         self.products[name] = value
 
     def allocate(self, name: str, type: 'Ingredient.Type', **kwargs):
