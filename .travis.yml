@@ -10,5 +10,6 @@ install:
   - pip install coverage
 script:
   - coverage run -m unittest tests.pyplant_test
+  - coverage run -a -m unittest tests.utils_test
 after_success:
   - bash <(curl -s https://codecov.io/bash)

@@ -9,7 +9,7 @@ import time
 import warnings
 from enum import Enum
 from types import SimpleNamespace
-from typing import Callable, Any, Dict, Generator, Union, List, Tuple, Type, Optional, TYPE_CHECKING
+from typing import *
 
 import numpy as np
 from dateutil.relativedelta import relativedelta
@@ -347,6 +347,12 @@ class Plant:
 
     def get_config_object(self) -> 'ConfigBase':
         return self.config
+
+    def get_ingredient_object(self, name: str) -> 'Ingredient':
+        if name not in self.ingredients:
+            raise ValueError("Ingredient '{}' is not found.".format(name))
+
+        return self.ingredients[name]
 
     def _peek_config_param(self, name: str) -> Any:
         return self.config.peek(name)
@@ -907,12 +913,12 @@ class Reactor:
 
         self.name = name
         self.func = func
-        self.generator = None
-        self.inputs = set({})
-        self.outputs = set({})
-        self.params = set({})
-        self.subreactors = set([])
-        self.signature = None
+        self.generator = None       # type: Optional[Generator]
+        self.inputs = set({})       # type: Set[str]
+        self.outputs = set({})      # type: Set[str]
+        self.params = set({})       # type: Set[str]
+        self.subreactors = set([])  # type: Set[str]
+        self.signature = None       # type: Optional[str]
 
     def get_signature(self):
         return self.signature
@@ -1040,12 +1046,12 @@ class Ingredient:
         else:
             return Ingredient.Type.object
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, type: Optional['Ingredient.Type'] = None):
         self.name = name
         self.signature = None
         self.isSignatureFresh = False
         self.isFresh = False  # Whether has been produced during the current plant run (not loaded from disk).
-        self.type = Ingredient.Type.unknown
+        self.type = type or Ingredient.Type.unknown
         self.producerName = None
         # Temporary ingredients can be created to hold intermediate results, and will be removed
         # when the reactor finishes.
@@ -1113,13 +1119,13 @@ class Warehouse:
 
     def __init__(self, baseDir, logger: logging.Logger):
         self.baseDir = baseDir
-        self.cache = {}
-        self.simpleStore = {}
-        self.h5Files = {}  # type: Dict[str, h5py.File]
-        self.bufferedArrays = {}  # type: Dict[str, Warehouse.IBufferedArray]
+        self.cache = {}              # type: Dict[str, Any]
+        self.simpleStore = {}        # type: Dict[str, Any]
+        self.h5Files = {}            # type: Dict[str, h5py.File]
+        self.bufferedArrays = {}     # type: Dict[str, Warehouse.IBufferedArray]
         self.customKerasLayers = {}  # type: Dict[str, Any]
         self.logger = logger
-        self.manifest = {}
+        self.manifest = {}           # type: Dict[str, Dict[str, Any]]
 
         try:
             manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
@@ -1135,6 +1141,12 @@ class Warehouse:
                 self.simpleStore = {}
         except pickle.UnpicklingError as e:
             self.logger.warning("Failed to load the warehouse state. Corrupted files?", exc_info=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def fetch(self, name: str, signature: str = None) -> Any:
         """
