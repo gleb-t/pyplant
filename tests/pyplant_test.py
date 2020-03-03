@@ -354,7 +354,7 @@ class PyPlantTest(unittest.TestCase):
 
         def _load_func_from_file(filepath: str, funcName: str):
 
-            randomString = ''.join(random.choices(string.ascii_uppercase, k=10))
+            randomString = ''.join(random.choice(string.ascii_uppercase) for _ in range(10))
             loader = importlib.machinery.SourceFileLoader("_custom_module." + randomString, filepath)
             module = types.ModuleType(loader.name)
             loader.exec_module(module)
