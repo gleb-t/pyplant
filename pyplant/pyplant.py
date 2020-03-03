@@ -37,7 +37,7 @@ def _compute_function_hash(func: Callable) -> str:
         sourceLines = inspect.getsourcelines(func)
     except OSError as e:
         warnings.warn("Failed to get function source code: {}".format(e))
-        sourceLines = 'source-not-available_{}'.format(time.time())
+        sourceLines = 'source-not-available_{}'.format(id(func))  # Use object ID. Will change on re-run.
     functionSource = ''.join(sourceLines[0])
 
     return _compute_string_hash(functionSource)
@@ -409,7 +409,7 @@ class Plant:
 
         # Collect all parameters that affect the ingredient. (Aux. params don't affect it, by definition.)
         try:
-            parameterStrings = ['{}_{!r}'.format(name, self.config.peek(name)) for name in sorted(reactor.get_params())
+            parameterStrings = [self._compute_parameter_signature(name) for name in sorted(reactor.get_params())
                                 if not self.config.is_auxiliary(name) and self.config.has(name)]
             parameterSignature = self.stringHash(''.join(parameterStrings))
         except KeyError as e:
@@ -424,7 +424,19 @@ class Plant:
         ingredient.set_current_signature(fullSignature)
 
         self.logger.debug("Computed signature for '{}': '{}'".format(ingredient.name, ingredient.signature))
+
         return fullSignature
+
+    def _compute_parameter_signature(self, name):
+        value = self.config.peek(name)
+        if callable(value):
+            # A special case for callables: try to use the source, instead of the __repr__ output,
+            # which contains the address changing every run.
+            valueSig = self.functionHash(value)
+        else:
+            valueSig = repr(value)
+
+        return '{}={}'.format(name, valueSig)
 
     def _compute_reactor_signature(self, reactorName: str) -> str:
         """

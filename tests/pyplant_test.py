@@ -76,13 +76,13 @@ class PyPlantTest(unittest.TestCase):
 
         return self.plant
 
-    def _reconstruct_plant(self, config, addReactors: bool = True):
+    def _reconstruct_plant(self, config, addReactors: bool = True, useTestFuncHash: bool = True):
         reactors = self.plant.get_reactors()
         self._shutdown_plant()
         self.startedReactors = []
         self.startedSubreactors = []
 
-        self._construct_plant(config)
+        self._construct_plant(config, useTestFuncHash=useTestFuncHash)
         if addReactors:
             self.plant.add_reactors(*tuple(reactors))
 
@@ -335,6 +335,106 @@ class PyPlantTest(unittest.TestCase):
         config.paramA = 2
         self._reconstruct_plant(config)
         self.plant.run_reactor(consumer)
+        self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
+
+    # noinspection DuplicatedCode
+    def test_config_value_is_func(self):
+        """
+        When using functions as config values (e.g. for code-defined models),
+        the plant should hash them using the source code and not their address,
+        allowing the dependent reactors to be properly cached.
+        """
+
+        import tempfile
+        import random
+        import string
+        import types
+        # noinspection PyCompatibility
+        import importlib.machinery
+
+        def _load_func_from_file(filepath: str, funcName: str):
+
+            randomString = ''.join(random.choices(string.ascii_uppercase, k=10))
+            loader = importlib.machinery.SourceFileLoader("_custom_module." + randomString, filepath)
+            module = types.ModuleType(loader.name)
+            loader.exec_module(module)
+
+            return getattr(module, funcName)
+
+        def _load_func_from_code(sourceCode, funcName):
+            fd, filepath = None, None
+            try:
+                fd, filepath = tempfile.mkstemp(suffix='.py')
+                os.write(fd, sourceCode.encode('utf-8'))
+                os.fsync(fd)
+                os.close(fd)
+
+                return _load_func_from_file(filepath, funcName)
+            except Exception as e:
+                raise
+            finally:
+                # If we remove the file, pyplant won't be able to laod the source.
+                # So we leave it up to OS to clear the temp dir.
+                if fd is not None and os.path.exists(filepath):
+                    pass
+                    # os.remove(filepath)
+
+        class Config(ConfigBase):
+
+            def __init__(self):
+                # noinspection PyCompatibility
+                super().__init__({})
+
+                self.funcParam = lambda: 1  # We'll fill this in later.
+
+        @ReactorFunc
+        def producer(pipe: Pipework, config: Config):
+
+            funcParam = config.funcParam
+            result = funcParam()
+            print(result)
+            print(funcParam)
+
+            pipe.send('ingredient', result, Ingredient.Type.simple)
+
+            yield
+
+        @ReactorFunc
+        def consumer(pipe: Pipework, config: Config):
+
+            ingredient = yield pipe.receive('ingredient')  # type: int
+
+            yield
+
+        func1 = _load_func_from_code('def func():\n\treturn "one"\n', 'func')
+        func2 = _load_func_from_code('def func():\n\treturn "two"\n', 'func')
+
+        config = Config()
+        config.funcParam = func1
+        # Disable the custom function hash, use the standard source-based hash function that we want to test.
+        self._construct_plant(config, [producer, consumer], useTestFuncHash=False)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='Both should run initially.')
+
+        self._reconstruct_plant(config, useTestFuncHash=False)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.plant.fetch_ingredient('ingredient'), 'one')
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+
+        # Reload the function to change their address, but keep the source unchanged.
+        # This shouldn't trigger reactor re-execution.
+        func1 = _load_func_from_code('def func():\n\treturn "one"\n', 'func')
+        config.funcParam = func1
+        self._reconstruct_plant(config, useTestFuncHash=False)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.plant.fetch_ingredient('ingredient'), 'one')
+        self.assertEqual(self.startedReactors, ['consumer'], msg='The producer should be cached.')
+
+        # Now give it a different function.
+        config.funcParam = func2
+        self._reconstruct_plant(config, useTestFuncHash=False)
+        self.plant.run_reactor(consumer)
+        self.assertEqual(self.plant.fetch_ingredient('ingredient'), 'two')
         self.assertEqual(self.startedReactors, ['consumer', 'producer'], msg='The producer should be rerun.')
 
     def test_scipy_sparse(self):
