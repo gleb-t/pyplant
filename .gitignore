@@ -28,3 +28,6 @@ crashlytics-build.properties
 fabric.properties
 
 **/__pycache__
+
+
+venv

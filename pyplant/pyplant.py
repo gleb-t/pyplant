@@ -794,7 +794,7 @@ class ConfigBase:
 
     def _throw_if_doesnt_exist(self, name):
         if name not in self.__dict__:
-            raise RuntimeError("The config parameter '{}' does not exist.".format(name))
+            raise AttributeError("The config parameter '{}' does not exist.".format(name))
 
 
 class ConfigValue:
