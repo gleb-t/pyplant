@@ -33,6 +33,9 @@ class PyPlantTest(unittest.TestCase):
         self.startedSubreactors = []
         self.modifiedReactors = []
 
+        # Ingredient specs that are enabled by default.
+        self.hdfSpec = specs.HdfArraySpec()
+
     def tearDown(self):
         super().tearDown()
 
@@ -71,6 +74,7 @@ class PyPlantTest(unittest.TestCase):
         self.plant.add_event_listener(Plant.EventType.reactor_started, _on_reactor_started)
         self.plant.add_event_listener(Plant.EventType.subreactor_started, _on_reactor_started)
         self.plant.set_config(config)
+        self.plant.warehouse.register_ingredient_specs([self.hdfSpec])
         if reactors is not None:
             self.plant.add_reactors(*tuple(reactors))
 
@@ -439,11 +443,13 @@ class PyPlantTest(unittest.TestCase):
 
     def test_scipy_sparse(self):
         import scipy.sparse as sp
+        from pyplant.specs import ScipySparseSpec
 
+        sparseSpec = ScipySparseSpec()
         @ReactorFunc
         def producer(pipe: Pipework):
             eye = sp.eye(12)
-            pipe.send('eye', eye, Ingredient.Type.scipy_sparse)
+            pipe.send('eye', eye, ScipySparseSpec)
 
         @ReactorFunc
         def consumer(pipe: Pipework):
@@ -452,22 +458,21 @@ class PyPlantTest(unittest.TestCase):
             np.testing.assert_array_equal(eye.todense(), sp.eye(12).todense())
 
         self._construct_plant({}, [producer, consumer])
+        self.plant.warehouse.register_ingredient_specs([sparseSpec])
         self.plant.run_reactor(consumer)
 
     def test_hdf_arrays(self):
 
         @ReactorFunc
         def producer(pipe: Pipework):
-            array1 = pipe.allocate('array1', Ingredient.Type.hdf_array,
-                                   shape=(4, 5, 6, 7), dtype=np.uint8)
-            array2 = pipe.allocate('array2', Ingredient.Type.hdf_array,
-                                   shape=(3, 500), dtype=np.bool)
+            array1 = pipe.allocate('array1', specs.HdfArraySpec, shape=(4, 5, 6, 7), dtype=np.uint8)
+            array2 = pipe.allocate('array2', specs.HdfArraySpec, shape=(3, 500), dtype=np.bool)
 
             array1[:, 3, 4, :] = 42
             array2[2, :250] = True
 
-            pipe.send('array1', array1, Ingredient.Type.hdf_array)
-            pipe.send('array2', array2, Ingredient.Type.hdf_array)
+            pipe.send('array1', array1, specs.HdfArraySpec)
+            pipe.send('array2', array2, specs.HdfArraySpec)
 
             yield
 
@@ -942,7 +947,7 @@ class PyPlantTest(unittest.TestCase):
             pipe.send('list', ['a', 'b', 'c'])
             pipe.send('array', np.arange(0, 100))
 
-            hdfArray = pipe.allocate('hdf-array', Ingredient.Type.hdf_array, shape=(100,), dtype=np.float32)
+            hdfArray = pipe.allocate('hdf-array', specs.HdfArraySpec, shape=(100,), dtype=np.float32)
             hdfArray[...] = np.arange(0, 100)
             pipe.send('hdf-array', hdfArray)
 
@@ -1001,17 +1006,19 @@ class PyPlantWarehouseTest(unittest.TestCase):
             'simple': (Ingredient.Type.simple, 'Value1'),
             'object': (Ingredient.Type.object, slice(1, 10, 2)),
             'array': (Ingredient.Type.array, np.ones(10, dtype=np.int32)),
-            'huge_array': (Ingredient.Type.hdf_array, np.ones(10, dtype=np.int32)),
+            'huge_array': (specs.HdfArraySpec.get_name(), np.ones(10, dtype=np.int32)),
         }
 
         self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
+        self.hdfSpec = specs.HdfArraySpec()
+        self.warehouse.register_ingredient_specs([self.hdfSpec])
 
         for name, (type, value) in self.ingredientsToTest.items():
             ingredient = Ingredient(name)
             ingredient.type = type
             ingredient.set_current_signature('initialSignature')
 
-            if ingredient.type == Ingredient.Type.hdf_array:
+            if ingredient.type == specs.HdfArraySpec.get_name():
                 value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
 
             self.warehouse.store(ingredient, value)
@@ -1025,7 +1032,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
     def _assert_equal(self, type: Ingredient.Type, valA, valB, msg=None):
         if type == Ingredient.Type.simple or type == Ingredient.Type.object:
             self.assertEqual(valA, valB, msg=msg)
-        elif type == Ingredient.Type.array or type == Ingredient.Type.hdf_array:
+        elif type == Ingredient.Type.array or type == specs.HdfArraySpec.get_name():
             self.assertTrue(np.all(np.equal(valA[...], valB[...])))
         else:
             raise RuntimeError("Unsupported ingredient type: '{}'".format(type))
@@ -1051,13 +1058,14 @@ class PyPlantWarehouseTest(unittest.TestCase):
         # Restart the warehouse, so we aren't overwriting ingredients within the same session (this is not allowed).
         self.warehouse.close()
         self.warehouse = pyplant.Warehouse(self.dir, logging.getLogger('temp'))
+        self.warehouse.register_ingredient_specs([specs.HdfArraySpec()])
 
         for name, (type, value) in self.ingredientsToTest.items():
             ingredient = Ingredient(name)
             ingredient.type = type
             ingredient.set_current_signature('changedSignature')
 
-            if ingredient.type == Ingredient.Type.hdf_array:
+            if ingredient.type == specs.HdfArraySpec.get_name():
                 value = self.warehouse.allocate(ingredient, shape=(10,), dtype=np.int32, data=value)
 
             self.warehouse.store(ingredient, value)
@@ -1073,7 +1081,7 @@ class PyPlantWarehouseTest(unittest.TestCase):
             ingredient.type = type
             ingredient.set_current_signature('changedSignature')
 
-            if ingredient.type == Ingredient.Type.hdf_array:
+            if ingredient.type == specs.HdfArraySpec.get_name():
                 value = self.warehouse.allocate(ingredient, shape=(10, 10), dtype=np.int32)
 
             with self.assertRaises(RuntimeError):
@@ -1082,18 +1090,19 @@ class PyPlantWarehouseTest(unittest.TestCase):
     def test_graceful_overwrite_on_corrupted_hdf_files(self):
         # Store a new huge array ingredient.
         ingredient = Ingredient('test-dataset')
-        ingredient.type = Ingredient.Type.hdf_array
+        ingredient.type = specs.HdfArraySpec.get_name()
 
         dataset = self.warehouse.allocate(ingredient, shape=(300, 20, 20), dtype=np.float32)
         dataset[100:200] = 66
         self.warehouse.store(ingredient, dataset)
 
         self.warehouse.close()
-        hdfFilePath = self.warehouse._get_hdf_array_filepath('test-dataset')
+        hdfFilePath = self.hdfSpec._get_hdf_array_filepath(self.warehouse, 'test-dataset')
         with open(hdfFilePath, mode='wb') as file:
             file.write(bytearray([255] * 300))
 
         self.warehouse = pyplant.Warehouse(self.dir, logger=logging.getLogger('temp'))
+        self.warehouse.register_ingredient_specs([specs.HdfArraySpec()])
         dataset = self.warehouse.fetch('test-dataset', None)
 
         self.assertIsNone(dataset)

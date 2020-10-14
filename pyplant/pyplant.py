@@ -1,3 +1,4 @@
+import builtins
 import copy
 import hashlib
 import inspect
@@ -18,7 +19,6 @@ if TYPE_CHECKING:
     # These packages are needed to handle specific ingredient types, but they are only an optional dependency.
     import h5py
     import keras
-    import scipy.sparse as sp
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'ConfigValue', 'Pipework', 'Ingredient']
 
@@ -823,7 +823,7 @@ class Pipework:
         self._logger = logger
         self.config = plant.get_config_object()._clone_with_pipe(self)
 
-    def receive(self, name) -> Any:
+    def receive(self, name: str) -> Any:
         self._logger.debug("Reactor '{}' is requesting ingredient '{}'".format(self._connectedReactor.name, name))
         self._connectedReactor.register_input(name)
 
@@ -849,23 +849,28 @@ class Pipework:
 
         return ingredientValue
 
-    def send(self, name: str, value: Any, type: Optional['Ingredient.Type'] = None):
+    def send(self, name: str, value: Any, type: Union['Ingredient.Type', type, None] = None):
         self._logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self._connectedReactor.name, name))
 
+        type = self._standardize_type(type)
         if type is None:
-            type = Ingredient.infer_type_from_value(value)
+            type = self._warehouse._infer_type_from_value(value)
 
         ingredient = self._register_output(name, type)
         self._warehouse.store(ingredient, value)
 
-    def allocate(self, name: str, type: 'Ingredient.Type', **kwargs):
+    def allocate(self, name: str, type: Union['Ingredient.Type', type], **kwargs):
         self._logger.debug("Reactor '{}' is allocating ingredient '{}'.".format(self._connectedReactor.name, name))
+
+        type = self._standardize_type(type)
 
         ingredient = self._register_output(name, type)
         return self._warehouse.allocate(ingredient, **kwargs)
 
-    def allocate_temp(self, name: str, type: 'Ingredient.Type', **kwargs):
+    def allocate_temp(self, name: str, type: Union['Ingredient.Type', type], **kwargs):
         self._logger.debug("Reactor '{}' is allocating a temp ingredient '{}'.".format(self._connectedReactor.name, name))
+
+        type = self._standardize_type(type)
 
         # Temp ingredients aren't registered as outputs.
         ingredient = self._create_ingredient(name, type)
@@ -898,13 +903,13 @@ class Pipework:
         """
         return self._plant._peek_config_param(paramName)
 
-    def _register_output(self, name, type):
+    def _register_output(self, name: str, type: Union['Ingredient.Type', str]):
         ingredient = self._create_ingredient(name, type)
         self._connectedReactor.register_output(name)
 
         return ingredient
 
-    def _create_ingredient(self, name, type):
+    def _create_ingredient(self, name: str, type: Union['Ingredient.Type', str]):
         ingredient = self._plant._get_or_create_ingredient(name)
         ingredient.type = type
         ingredient.producerName = self._connectedReactor.name
@@ -912,6 +917,12 @@ class Pipework:
 
         return ingredient
 
+    @staticmethod
+    def _standardize_type(type: Union['Ingredient.Type', type, None]):
+        if isinstance(type, builtins.type) and issubclass(type, IngredientTypeSpec):
+            return type.get_name()
+
+        return type
 
 class Reactor:
 
@@ -1025,45 +1036,21 @@ class Reactor:
 class Ingredient:
 
     class Type(Enum):
-        unknown = 0,
-        simple = 1,
-        list = 2,
-        array = 3,
-        hdf_array = 4,
-        object = 5,
-        keras_model = 6,
-        file = 7,
-        buffered_array = 8,
-        scipy_sparse = 9
-
-    @classmethod
-    def infer_type_from_value(cls, value) -> 'Ingredient.Type':
-        """
-        Infer the ingredient storage type from the provided object.
-        """
-
-        valueType = type(value)
-        if valueType in [int, float, complex, str, bool]:
-            return Ingredient.Type.simple
-        elif valueType is list:
-            return Ingredient.Type.list
-        elif valueType is np.ndarray:
-            return Ingredient.Type.array
-        elif 'scipy.sparse' in sys.modules and sys.modules['scipy.sparse'].issparse(value):
-            return Ingredient.Type.scipy_sparse
-        elif 'h5py' in sys.modules and isinstance(value, sys.modules['h5py'].Dataset):
-            return Ingredient.Type.hdf_array
-        elif 'keras' in sys.modules and isinstance(value, sys.modules['keras'].models.Model):
-            return Ingredient.Type.keras_model
-        else:
-            return Ingredient.Type.object
+        unknown = 'unknown',
+        simple = 'simple',
+        list = 'list',
+        array = 'array',
+        object = 'object',
+        keras_model = 'keras_model',
+        file = 'file',
+        buffered_array = 'buffered_array',
 
     def __init__(self, name: str, type: Optional['Ingredient.Type'] = None):
         self.name = name
         self.signature = None
         self.isSignatureFresh = False
         self.isFresh = False  # Whether has been produced during the current plant run (not loaded from disk).
-        self.type = type or Ingredient.Type.unknown
+        self.type = type or Ingredient.Type.unknown  # type: Union['Ingredient.Type', str]
         self.producerName = None
         # Temporary ingredients can be created to hold intermediate results, and will be removed
         # when the reactor finishes.
@@ -1133,9 +1120,9 @@ class Warehouse:
         self.baseDir = baseDir
         self.cache = {}              # type: Dict[str, Any]
         self.simpleStore = {}        # type: Dict[str, Any]
-        self.h5Files = {}            # type: Dict[str, h5py.File]
         self.bufferedArrays = {}     # type: Dict[str, Warehouse.IBufferedArray]
         self.customKerasLayers = {}  # type: Dict[str, Any]
+        self.ingredientSpecs = {}    # type: Dict[str, IngredientTypeSpec]
         self.logger = logger
         self.manifest = {}           # type: Dict[str, Dict[str, Any]]
 
@@ -1194,10 +1181,6 @@ class Warehouse:
             return self._fetch_object(name)
         elif type == Ingredient.Type.array:
             return self._fetch_array(name)
-        elif type == Ingredient.Type.scipy_sparse:
-            return self._fetch_scipy_sparse(name)
-        elif type == Ingredient.Type.hdf_array:
-            return self._fetch_hdf_array(name)
         elif type == Ingredient.Type.object:
             return self._fetch_object(name)
         elif type == Ingredient.Type.keras_model:
@@ -1206,8 +1189,10 @@ class Warehouse:
             return self._fetch_file(name)
         elif type == Ingredient.Type.buffered_array:
             return self._fetch_buffered_array(name, meta)
-        else:
-            raise RuntimeError("This should never happen! Unsupported ingredient type: {}".format(type))
+        elif type in self.ingredientSpecs:
+            return self.ingredientSpecs[type].fetch(self, name, meta)
+
+        raise RuntimeError("Unsupported ingredient type: {}. Ingredient spec missing?".format(type))
 
     def store(self, ingredient: Ingredient, value: Any):
         self.logger.debug("Storing ingredient '{}' in the warehouse.".format(ingredient.name))
@@ -1226,10 +1211,6 @@ class Warehouse:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.array:
             self._store_array(ingredient.name, value)
-        elif ingredient.type == Ingredient.Type.scipy_sparse:
-            self._store_scipy_sparse(ingredient.name, value)
-        elif ingredient.type == Ingredient.Type.hdf_array:
-            self._store_hdf_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.object:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.keras_model:
@@ -1239,7 +1220,11 @@ class Warehouse:
         elif ingredient.type == Ingredient.Type.buffered_array:
             metadata = self._store_buffered_array(ingredient.name, value)
         else:
-            raise RuntimeError("Unsupported ingredient type: {}".format(ingredient.type))
+            # Handle custom ingredient types.
+            if ingredient.type in self.ingredientSpecs:
+                metadata = self.ingredientSpecs[ingredient.type].store(self, ingredient.name, value)
+            else:
+                raise RuntimeError("Unsupported ingredient type: {}".format(ingredient.type))
 
         self.manifest[ingredient.name] = {
             'signature': ingredient.signature,
@@ -1252,14 +1237,16 @@ class Warehouse:
 
     def allocate(self, ingredient: Ingredient, **kwargs):
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.hdf_array:
-            return self._allocate_hdf_array(ingredient.name, **kwargs)
-        elif ingredient.type == Ingredient.Type.file:
+        if ingredient.type == Ingredient.Type.file:
             return self._allocate_file(ingredient.name, **kwargs)
         elif ingredient.type == Ingredient.Type.buffered_array:
             return self._allocate_buffered_array(ingredient.name, **kwargs)
-        else:
-            raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
+        elif ingredient.type in self.ingredientSpecs:
+            spec = self.ingredientSpecs[ingredient.type]
+            if spec.isAllocatable:
+                return spec.allocate(self, ingredient.name, **kwargs)
+
+        raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
     def allocate_temp(self, ingredient: Ingredient, **kwargs):
         """
@@ -1269,21 +1256,25 @@ class Warehouse:
         :return:
         """
         self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.hdf_array:
-            return self._allocate_hdf_array('temp_' + ingredient.name, **kwargs)
-        elif ingredient.type == Ingredient.Type.buffered_array:
+        if ingredient.type == Ingredient.Type.buffered_array:
             return self._allocate_buffered_array('temp_' + ingredient.name, **kwargs)
-        else:
-            raise RuntimeError("Temp allocation is not supported for an ingredient of type {}".format(ingredient.type))
+        elif ingredient.type in self.ingredientSpecs:
+            spec = self.ingredientSpecs[ingredient.type]
+            if spec.isAllocatable:
+                return spec.allocate(self, 'temp_' + ingredient.name, **kwargs)
+
+        raise RuntimeError("Temp allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.hdf_array:
-            return self._deallocate_hdf_array('temp_' + ingredient.name)
-        elif ingredient.type == Ingredient.Type.buffered_array:
+        if ingredient.type == Ingredient.Type.buffered_array:
             return self._deallocate_buffered_array('temp_' + ingredient.name)
-        else:
-            raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
+        elif ingredient.type in self.ingredientSpecs:
+            spec = self.ingredientSpecs[ingredient.type]
+            if spec.isAllocatable:
+                return spec.deallocate(self, 'temp_' + ingredient.name)
+
+        raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
 
     def sign_fresh_ingredient(self, ingredientName: str, signature: str):
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
@@ -1294,8 +1285,33 @@ class Warehouse:
         # Store the new signature.
         self.manifest[ingredientName]['signature'] = signature
 
+    def register_ingredient_specs(self, specs: Sequence['IngredientTypeSpec']):
+        for spec in specs:
+            self.ingredientSpecs[spec.get_name()] = spec
+
     def set_custom_keras_layers(self, customLayers: Dict[str, Any]):
         self.customKerasLayers = customLayers
+
+    def _infer_type_from_value(self, value) -> Union['Ingredient.Type', str]:
+        """
+        Infer the ingredient storage type from the provided object.
+        """
+
+        valueType = type(value)
+        if valueType in [int, float, complex, str, bool]:
+            return Ingredient.Type.simple
+        elif valueType is list:
+            return Ingredient.Type.list
+        elif valueType is np.ndarray:
+            return Ingredient.Type.array
+        elif 'keras' in sys.modules and isinstance(value, sys.modules['keras'].models.Model):
+            return Ingredient.Type.keras_model
+        else:
+            for spec in self.ingredientSpecs.values():
+                if spec.is_instance(value):
+                    return spec.get_name()
+
+        return Ingredient.Type.object
 
     def _prune(self, name: str, type: Ingredient.Type):
         pass  # We are overwriting on store, for now there's no need for explicit pruning.
@@ -1329,105 +1345,8 @@ class Warehouse:
     def _fetch_array(self, name):
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)))
 
-    def _store_scipy_sparse(self, name, value):
-        import scipy.sparse as sp
-
-        sp.save_npz(os.path.join(self.baseDir, '{}.npz'.format(name)), value)
-
-    def _fetch_scipy_sparse(self, name):
-        import scipy.sparse as sp
-
-        return sp.load_npz(os.path.join(self.baseDir, '{}.npz'.format(name)))
-
-    def _allocate_hdf_array(self, name, shape, dtype=np.float, **kwargs):
-        import h5py
-
-        dataset = self._fetch_hdf_array(name)
-        h5FilePath = self._get_hdf_array_filepath(name)
-
-        # todo should probably always recreate the array, its cheap and consistent with BNAs.
-
-        # If the dataset already exists, but has a wrong shape/type, recreate it.
-        if dataset is not None and (dataset.shape != shape or dataset.dtype != dtype):
-            try:
-                self.h5Files[name].close()
-                os.remove(h5FilePath)
-            except RuntimeError as e:
-                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
-                                    .format(name, e))
-            dataset = None
-
-        if dataset is None:
-            self.h5Files[name] = h5py.File(h5FilePath, 'a')
-            dataset = self.h5Files[name].create_dataset('data', shape=shape, dtype=dtype, **kwargs)
-
-        return dataset
-
-    def _deallocate_hdf_array(self, name):
-        h5FilePath = self._get_hdf_array_filepath(name)
-
-        if name not in self.h5Files:
-            raise RuntimeError("Cannot deallocate HDF array '{}', it doesn't exist.".format(name))
-
-        if not os.path.exists(h5FilePath):
-            raise RuntimeError("Cannot deallocate HDF array '{}', the file doesn't exist: '{}'."
-                               .format(name, h5FilePath))
-
-        self.h5Files[name].close()
-        del self.h5Files[name]
-        os.unlink(h5FilePath)
-
-    def _get_hdf_array_filepath(self, name):
-        return os.path.join(self.baseDir, name + '.hdf')
-
     def _get_buffered_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.bna')
-
-    # noinspection PyUnusedLocal
-    def _store_hdf_array(self, name, value: 'h5py.Dataset'):
-        # H5py takes care of storing to disk on-the-fly.
-        # Just flush the data, to make sure that it is persisted.
-        self.h5Files[name].flush()
-        pass
-
-    def _fetch_hdf_array(self, name):
-        import h5py
-
-        h5FilePath = self._get_hdf_array_filepath(name)
-        if name not in self.h5Files:
-            if not os.path.exists(h5FilePath):
-                return None
-
-            # If the array isn't in the manifest, but exists on disk, attempt to open it.
-            try:
-                self.h5Files[name] = h5py.File(h5FilePath, 'a')
-            except OSError as e:
-                self.logger.warning("Failed to open the HDF array at '{}' with error: {}"
-                                    .format(h5FilePath, str(e)))
-                self.logger.info("Deleting the corrupted file.")
-                os.remove(h5FilePath)
-                return None
-
-        dataset = None
-        try:
-            if 'data' in self.h5Files[name]:
-                # Try accessing the dataset. (Can crush for corrupted files.)
-                dataset = self.h5Files[name]['data']
-        except BaseException as e:
-            self.logger.warning("Suppressed an error while accessing HDF-dataset '{}' Details: {}"
-                                .format(name, e))
-
-        if dataset is None:
-            self.logger.info("The HDF file at '{}' has no dataset. Corrupted file, deleting.".format(h5FilePath))
-            try:
-                self.h5Files[name].close()
-                os.remove(h5FilePath)
-            except BaseException as e:
-                self.logger.warning("Suppressed an error while removing HDF-dataset '{}' Details: {}"
-                                    .format(name, e))
-            return None
-
-        return dataset
 
     def _store_keras_model(self, name, value):
 
@@ -1546,15 +1465,42 @@ class Warehouse:
             pickle.dump(self.manifest, file)
 
     def close(self):
-        for name, h5File in list(self.h5Files.items()):
-            h5File.close()
-            del self.h5Files[name]
-
         for bna in self.bufferedArrays.values():
             bna.destruct()
+
+        for spec in self.ingredientSpecs.values():
+            spec.close()
 
         self.save_manifest()
 
         # Explicitly clear the cache. This immediately deallocates NumPy arrays, instead of waiting for GC.
         for name in list(self.cache.keys()):
             del self.cache[name]
+
+
+class IngredientTypeSpec:
+
+    def __init__(self):
+        self.isAllocatable = False
+
+    @classmethod
+    def get_name(cls) -> str:
+        raise NotImplementedError()
+
+    def store(self, warehouse: Warehouse, name: str, value: Any) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError()
+
+    def fetch(self, warehouse: Warehouse, name: str, meta: Optional[Dict[str, Any]]) -> Any:
+        raise NotImplementedError()
+
+    def allocate(self, warehouse: Warehouse, name: str, **kwargs) -> Any:
+        raise NotImplementedError()
+
+    def deallocate(self, warehouse: Warehouse, name: str):
+        raise NotImplementedError()
+
+    def close(self):
+        pass
+
+    def is_instance(self, value) -> bool:
+        raise NotImplementedError()

@@ -1,4 +1,5 @@
 from pyplant.pyplant import *
+import pyplant.specs as specs
 import pyplant.test as test
 import pyplant.utils as utils
 
