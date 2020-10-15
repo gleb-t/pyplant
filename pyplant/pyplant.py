@@ -1,3 +1,4 @@
+import abc
 import builtins
 import copy
 import hashlib
@@ -14,11 +15,6 @@ from typing import *
 
 import numpy as np
 from dateutil.relativedelta import relativedelta
-
-if TYPE_CHECKING:
-    # These packages are needed to handle specific ingredient types, but they are only an optional dependency.
-    import h5py
-    import keras
 
 __all__ = ['Plant', 'ReactorFunc', 'SubreactorFunc', 'ConfigBase', 'ConfigValue', 'Pipework', 'Ingredient']
 
@@ -1041,7 +1037,6 @@ class Ingredient:
         list = 'list',
         array = 'array',
         object = 'object',
-        keras_model = 'keras_model',
         file = 'file',
         buffered_array = 'buffered_array',
 
@@ -1121,7 +1116,6 @@ class Warehouse:
         self.cache = {}              # type: Dict[str, Any]
         self.simpleStore = {}        # type: Dict[str, Any]
         self.bufferedArrays = {}     # type: Dict[str, Warehouse.IBufferedArray]
-        self.customKerasLayers = {}  # type: Dict[str, Any]
         self.ingredientSpecs = {}    # type: Dict[str, IngredientTypeSpec]
         self.logger = logger
         self.manifest = {}           # type: Dict[str, Dict[str, Any]]
@@ -1183,8 +1177,6 @@ class Warehouse:
             return self._fetch_array(name)
         elif type == Ingredient.Type.object:
             return self._fetch_object(name)
-        elif type == Ingredient.Type.keras_model:
-            return self._fetch_keras_model(name)
         elif type == Ingredient.Type.file:
             return self._fetch_file(name)
         elif type == Ingredient.Type.buffered_array:
@@ -1213,8 +1205,6 @@ class Warehouse:
             self._store_array(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.object:
             self._store_object(ingredient.name, value)
-        elif ingredient.type == Ingredient.Type.keras_model:
-            self._store_keras_model(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.file:
             self._store_file(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.buffered_array:
@@ -1289,9 +1279,6 @@ class Warehouse:
         for spec in specs:
             self.ingredientSpecs[spec.get_name()] = spec
 
-    def set_custom_keras_layers(self, customLayers: Dict[str, Any]):
-        self.customKerasLayers = customLayers
-
     def _infer_type_from_value(self, value) -> Union['Ingredient.Type', str]:
         """
         Infer the ingredient storage type from the provided object.
@@ -1304,8 +1291,6 @@ class Warehouse:
             return Ingredient.Type.list
         elif valueType is np.ndarray:
             return Ingredient.Type.array
-        elif 'keras' in sys.modules and isinstance(value, sys.modules['keras'].models.Model):
-            return Ingredient.Type.keras_model
         else:
             for spec in self.ingredientSpecs.values():
                 if spec.is_instance(value):
@@ -1347,20 +1332,6 @@ class Warehouse:
 
     def _get_buffered_array_filepath(self, name):
         return os.path.join(self.baseDir, name + '.bna')
-
-    def _store_keras_model(self, name, value):
-
-        value.save(os.path.join(self.baseDir, '{}.keras'.format(name)), overwrite=True)
-        pass
-
-    def _fetch_keras_model(self, name):
-        import keras.models
-
-        modelPath = os.path.join(self.baseDir, '{}.keras'.format(name))
-        if os.path.exists(modelPath):
-            return keras.models.load_model(modelPath, custom_objects=self.customKerasLayers)
-
-        return None
 
     def _allocate_file(self, name, **kwargs) -> str:
         # Create an empty file, clear if it already exists.
@@ -1478,29 +1449,47 @@ class Warehouse:
             del self.cache[name]
 
 
-class IngredientTypeSpec:
+class InvalidOperationException(Exception):
+    pass
+
+
+class IngredientTypeSpec(abc.ABC):
+    """
+    Only the abstract methods must be implemented when creating a new ingredient type spec.
+    However, if the ingredient supports/requires allocation, then the allocatable flag should be set,
+    and the relevant method should be implemented.
+    """
 
     def __init__(self):
         self.isAllocatable = False
 
     @classmethod
+    @abc.abstractmethod
     def get_name(cls) -> str:
-        raise NotImplementedError()
+        pass
 
+    @abc.abstractmethod
     def store(self, warehouse: Warehouse, name: str, value: Any) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError()
+        pass
 
+    @abc.abstractmethod
     def fetch(self, warehouse: Warehouse, name: str, meta: Optional[Dict[str, Any]]) -> Any:
-        raise NotImplementedError()
+        pass
 
     def allocate(self, warehouse: Warehouse, name: str, **kwargs) -> Any:
-        raise NotImplementedError()
+        raise InvalidOperationException()
 
     def deallocate(self, warehouse: Warehouse, name: str):
-        raise NotImplementedError()
+        raise InvalidOperationException()
 
     def close(self):
+        """
+        Called on plant shutdown. Here any external resources (e.g. file handles) should be released.
+        """
         pass
 
     def is_instance(self, value) -> bool:
-        raise NotImplementedError()
+        """
+        Implement, if the ingredient type supports automatic type inference.
+        """
+        return False

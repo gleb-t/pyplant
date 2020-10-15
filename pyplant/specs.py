@@ -1,5 +1,5 @@
 import os
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 
 import numpy as np
 
@@ -128,6 +128,7 @@ class ScipySparseSpec(IngredientTypeSpec):
     def store(self, warehouse: Warehouse, name: str, value: Any) -> Optional[Dict[str, Any]]:
         import scipy.sparse as sp
         sp.save_npz(os.path.join(warehouse.baseDir, '{}.npz'.format(name)), value)
+        return None
 
     def fetch(self, warehouse: Warehouse, name: str, meta: Optional[Dict[str, Any]]) -> Any:
         import scipy.sparse as sp
@@ -136,3 +137,31 @@ class ScipySparseSpec(IngredientTypeSpec):
     def is_instance(self, value) -> bool:
         import scipy.sparse as sp
         return sp.issparse(value)
+
+
+class KerasModelSpec(IngredientTypeSpec):
+
+    def __init__(self, customLayers: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.customLayers = customLayers or {}
+
+    @classmethod
+    def get_name(cls) -> str:
+        return 'keras_model'
+
+    def store(self, warehouse: Warehouse, name: str, value: Any) -> Optional[Dict[str, Any]]:
+        value.save(os.path.join(warehouse.baseDir, '{}.keras'.format(name)), overwrite=True)
+        return None
+
+    def fetch(self, warehouse: Warehouse, name: str, meta: Optional[Dict[str, Any]]) -> Any:
+        import keras.models
+
+        modelPath = os.path.join(warehouse.baseDir, '{}.keras'.format(name))
+        if os.path.exists(modelPath):
+            return keras.models.load_model(modelPath, custom_objects=self.customLayers)
+
+        return None
+
+    def is_instance(self, value) -> bool:
+        import keras
+        return isinstance(value, keras.models.Model)

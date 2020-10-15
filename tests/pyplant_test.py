@@ -3,15 +3,41 @@ import os
 import shutil
 import tempfile
 import unittest
-from typing import Callable, Optional
+from typing import Callable, Optional, Any, Dict
 
 import numpy as np
 
 from pyplant import *
+from pyplant.pyplant import IngredientTypeSpec, Warehouse
 
 
 class DummyClass:
     pass
+
+class CustomSpec(IngredientTypeSpec):
+
+    # Some custom type for this ingredient's values.
+    class ValueWrapper:
+        def __init__(self, val):
+            self.val = val
+
+    def __init__(self):
+        super().__init__()
+        self.valueStore = {}
+
+    @classmethod
+    def get_name(cls) -> str:
+        return 'test_custom_spec'
+
+    def store(self, warehouse: Warehouse, name: str, value: Any) -> Optional[Dict[str, Any]]:
+        self.valueStore[name] = value
+        return None
+
+    def fetch(self, warehouse: Warehouse, name: str, meta: Optional[Dict[str, Any]]) -> Any:
+        return self.valueStore.get(name, default=None)
+
+    def is_instance(self, value) -> bool:
+        return isinstance(value, CustomSpec.ValueWrapper)
 
 
 # noinspection PyCompatibility
@@ -510,6 +536,7 @@ class PyPlantTest(unittest.TestCase):
         import keras
 
         weights = None
+        kerasSpec = specs.KerasModelSpec()
 
         @ReactorFunc
         def producer(pipe: Pipework):
@@ -521,7 +548,7 @@ class PyPlantTest(unittest.TestCase):
             nonlocal weights
             weights = m.get_weights()[0]
 
-            pipe.send('model', m, Ingredient.Type.keras_model)
+            pipe.send('model', m, specs.KerasModelSpec)
 
         @ReactorFunc
         def consumer(pipe: Pipework):
@@ -531,9 +558,29 @@ class PyPlantTest(unittest.TestCase):
             np.testing.assert_array_equal(loadedWeights, weights)
 
         self._construct_plant({}, [producer, consumer])
+        self.plant.warehouse.register_ingredient_specs([kerasSpec])
         self.plant.run_reactor(consumer)
 
         self._reconstruct_plant({})
+        self.plant.warehouse.register_ingredient_specs([kerasSpec])
+        self.plant.run_reactor(consumer)
+
+    def test_custom_ingredient_spec(self):
+        spec = CustomSpec()
+
+        @ReactorFunc
+        def producer(pipe: Pipework):
+            val = CustomSpec.ValueWrapper(15)
+            pipe.send('val', val, CustomSpec)
+
+        @ReactorFunc
+        def consumer(pipe: Pipework):
+            val = yield pipe.receive('val')  # type: CustomSpec.ValueWrapper
+
+            self.assertEqual(val.val, 15)
+
+        self._construct_plant({}, [producer, consumer])
+        self.plant.warehouse.register_ingredient_specs([spec])
         self.plant.run_reactor(consumer)
 
     def test_subreactors_basic(self):
