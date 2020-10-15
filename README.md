@@ -122,15 +122,27 @@ Here are the possible types:
 - `list`   Python list of primitive type objects.
 - `object` Any Python object that can be pickled.
 - `array`  NumPy array.
-- `hdf_array` HDF array. Needs to be allocated. H5Py needs to be installed.
-- `keras_model` Keras model, written using `save_model()`. Keras needs to be installed.
-- `file`        File stored in the plant dir, passed as a path. Needs to be allocated.
+- `file`   File stored in the plant dir, passed as a path. Needs to be allocated.
+
+Several additional types are available as optional extensions:
+- `specs.HdfArraySpec`    HDF array. Needs to be allocated. H5Py needs to be installed.
+- `specs.KerasModelSpec`  Keras model, written using `save_model()`. Keras needs to be installed.
+- `specs.ScipySparseSpec` Sparse Scipy matrix, similar to NumPy arrays. SciPy needs to be installed.
+
+These 'ingredient specs' need to be registered with the plant before they could be used:
+```
+with Plant('/tmp/pyplant/my-project') as plant:
+    plant.warehouse.register_ingredient_specs([specs.HdfArraySpec(), specs.ScipySparseSpec()])
+```
+When sending, the ingredient type can be specified by passing the spec class type (not required, type can be inferred):
+
+`pipe.send('my-hdf-array', array, specs.HdfArraySpec)`
 
 Some ingredient types need to be allocated first, because PyPlant manages their creation.
 Additional arguments can be provided, depending on the type. Here is an example for an HDF-array:
 
 ```python
-hdf_array = pipe.allocate('hdf-array', Ingredient.Type.hdf_array,
+hdf_array = pipe.allocate('hdf-array', specs.HdfArraySpec,
                           shape=(500, 1000, 1000), dtype=np.float32)
 ```
 
