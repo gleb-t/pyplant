@@ -1235,8 +1235,10 @@ class Warehouse:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
                 return spec.allocate(self, ingredient.name, **kwargs)
+            else:
+                raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
-        raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
+        raise ValueError("Unknown ingredient type '{}'.".format(ingredient.type))
 
     def allocate_temp(self, ingredient: Ingredient, **kwargs):
         """
@@ -1252,8 +1254,10 @@ class Warehouse:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
                 return spec.allocate(self, 'temp_' + ingredient.name, **kwargs)
+            else:
+                raise RuntimeError("Allocation is not supported for an ingredient of type {}".format(ingredient.type))
 
-        raise RuntimeError("Temp allocation is not supported for an ingredient of type {}".format(ingredient.type))
+        raise ValueError("Unknown ingredient type '{}'.".format(ingredient.type))
 
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
@@ -1263,8 +1267,10 @@ class Warehouse:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
                 return spec.deallocate(self, 'temp_' + ingredient.name)
+            else:
+                raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
 
-        raise RuntimeError("Deallocation is not supported for an ingredient of type {}".format(ingredient.type))
+        raise ValueError("Unknown ingredient type '{}'.".format(ingredient.type))
 
     def sign_fresh_ingredient(self, ingredientName: str, signature: str):
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
