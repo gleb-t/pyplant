@@ -1132,7 +1132,7 @@ class Warehouse:
                     self.simpleStore = pickle.load(file)
             else:
                 self.simpleStore = {}
-        except pickle.UnpicklingError as e:
+        except (pickle.UnpicklingError, ValueError) as e:
             self.logger.warning("Failed to load the warehouse state. Corrupted files?", exc_info=True)
 
     def __enter__(self):
