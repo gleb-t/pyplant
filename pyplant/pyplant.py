@@ -106,10 +106,6 @@ def SubreactorFunc(func):
 
 class Plant:
 
-    # todo This a horrible hack which requires the users of PyPlant to provide a reference to the BNA constructor
-    # todo We should pull BNAs into a separate package and have PyPlant rely on it. But I don't have time for it now.
-    bnaConstructor = None  # type: Callable[[str, Warehouse.IBufferedArray.FileMode, Tuple, Type], Warehouse.IBufferedArray]
-
     class EventType(Enum):
         unknown = 0,
         reactor_started = 1,
@@ -1038,7 +1034,6 @@ class Ingredient:
         array = 'array',
         object = 'object',
         file = 'file',
-        buffered_array = 'buffered_array',
 
     def __init__(self, name: str, type: Optional['Ingredient.Type'] = None):
         self.name = name
@@ -1069,53 +1064,10 @@ class Ingredient:
 
 class Warehouse:
 
-    class IBufferedArray:
-        # todo pull BNAs into a package so we can use that type directly and avoid copy-paste
-
-        class FileMode(Enum):
-            """
-            The integer value must be identical to the C++ implementation.
-            """
-            unknown = 0
-            readonly = 1
-            update = 2
-            rewrite = 3
-
-        def __init__(self, filepath: str, fileMode: FileMode, shape: Tuple,
-                     dtype: np.dtype, maxBufferSize: int):
-            self.filepath = filepath
-            self.fileMode = fileMode
-            self.dtype = dtype  # type: np.dtype
-            self.ndim = len(shape)
-            self.shape = shape
-            self.maxBufferSize = maxBufferSize
-            self.cPointer = 0
-
-            raise RuntimeError("This class is an interface and shouldn't be instantiated.")
-
-        def __enter__(self):
-            pass
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            pass
-
-        def read_slice(self, index: int) -> np.ndarray:
-            pass
-
-        def destruct(self):
-            pass
-
-        def flush(self, flushOsBuffer: bool = False):
-            pass
-
-        def fill_box(self, value, cornerLow: Tuple, cornerHigh: Tuple):
-            pass
-
     def __init__(self, baseDir, logger: logging.Logger):
         self.baseDir = baseDir
         self.cache = {}              # type: Dict[str, Any]
         self.simpleStore = {}        # type: Dict[str, Any]
-        self.bufferedArrays = {}     # type: Dict[str, Warehouse.IBufferedArray]
         self.ingredientSpecs = {}    # type: Dict[str, IngredientTypeSpec]
         self.logger = logger
         self.manifest = {}           # type: Dict[str, Dict[str, Any]]
@@ -1179,8 +1131,6 @@ class Warehouse:
             return self._fetch_object(name)
         elif type == Ingredient.Type.file:
             return self._fetch_file(name)
-        elif type == Ingredient.Type.buffered_array:
-            return self._fetch_buffered_array(name, meta)
         elif type in self.ingredientSpecs:
             return self.ingredientSpecs[type].fetch(self, name, meta)
 
@@ -1207,8 +1157,6 @@ class Warehouse:
             self._store_object(ingredient.name, value)
         elif ingredient.type == Ingredient.Type.file:
             self._store_file(ingredient.name, value)
-        elif ingredient.type == Ingredient.Type.buffered_array:
-            metadata = self._store_buffered_array(ingredient.name, value)
         else:
             # Handle custom ingredient types.
             if ingredient.type in self.ingredientSpecs:
@@ -1229,8 +1177,6 @@ class Warehouse:
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
         if ingredient.type == Ingredient.Type.file:
             return self._allocate_file(ingredient.name, **kwargs)
-        elif ingredient.type == Ingredient.Type.buffered_array:
-            return self._allocate_buffered_array(ingredient.name, **kwargs)
         elif ingredient.type in self.ingredientSpecs:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
@@ -1248,9 +1194,7 @@ class Warehouse:
         :return:
         """
         self.logger.debug("Allocating storage for a temp ingredient '{}' in the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.buffered_array:
-            return self._allocate_buffered_array('temp_' + ingredient.name, **kwargs)
-        elif ingredient.type in self.ingredientSpecs:
+        if ingredient.type in self.ingredientSpecs:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
                 return spec.allocate(self, 'temp_' + ingredient.name, **kwargs)
@@ -1261,9 +1205,7 @@ class Warehouse:
 
     def deallocate_temp(self, ingredient: Ingredient):
         self.logger.debug("Deallocating a temp ingredient '{}' from the warehouse.".format(ingredient.name))
-        if ingredient.type == Ingredient.Type.buffered_array:
-            return self._deallocate_buffered_array('temp_' + ingredient.name)
-        elif ingredient.type in self.ingredientSpecs:
+        if ingredient.type in self.ingredientSpecs:
             spec = self.ingredientSpecs[ingredient.type]
             if spec.isAllocatable:
                 return spec.deallocate(self, 'temp_' + ingredient.name)
@@ -1336,9 +1278,6 @@ class Warehouse:
     def _fetch_array(self, name):
         return np.load(os.path.join(self.baseDir, '{}.npy'.format(name)))
 
-    def _get_buffered_array_filepath(self, name):
-        return os.path.join(self.baseDir, name + '.bna')
-
     def _allocate_file(self, name, **kwargs) -> str:
         # Create an empty file, clear if it already exists.
         filepath = self._get_filepath_from_name(name)
@@ -1361,78 +1300,6 @@ class Warehouse:
 
         return None
 
-    def _allocate_buffered_array(self, name, shape, dtype=np.float, **kwargs):
-        if not Plant.bnaConstructor:
-            raise RuntimeError("BNA constructor (class) needs to be provided to PyPlant.")
-
-        filepath = self._get_buffered_array_filepath(name)
-        # metadata = self.manifest[name]['metadata']
-
-        if name in self.bufferedArrays:
-            raise RuntimeError("Cannot allocate buffered array '{}', it's already opened!".format(name))
-
-        # For BNAs, we simple recreate the file if it already exists.
-        # If the array already exists, but has a wrong shape/type, recreate it.
-        if os.path.exists(filepath):
-            self.logger.debug("Found BNA '{}' on disk while allocating. Recreating the file.".format(name))
-            try:
-                os.remove(filepath)
-            except RuntimeError as e:
-                self.logger.warning("Suppressed an error while removing dataset '{}' Details: {}"
-                                    .format(name, e))
-
-        self.bufferedArrays[name] = Plant.bnaConstructor(filepath, Warehouse.IBufferedArray.FileMode.rewrite,
-                                                         shape, dtype, **kwargs)
-        return self.bufferedArrays[name]
-
-    def _deallocate_buffered_array(self, name):
-        bnaFilepath = self._get_buffered_array_filepath(name)
-
-        if name not in self.bufferedArrays:
-            raise RuntimeError("Cannot deallocate buffered array '{}', it doesn't exist.".format(name))
-
-        if not os.path.exists(bnaFilepath):
-            raise RuntimeError("Cannot deallocate buffered array '{}', the file doesn't exist: '{}'."
-                               .format(name, bnaFilepath))
-
-        self.bufferedArrays[name].destruct()
-        del self.bufferedArrays[name]
-        os.unlink(bnaFilepath)
-
-    def _store_buffered_array(self, name, value: 'Warehouse.IBufferedArray') -> Dict[str, Any]:
-        # Just flush the data, to make sure that it is persisted.
-        self.bufferedArrays[name].flush(flushOsBuffer=True)
-        metadata = {
-            'shape': value.shape,
-            'dtype_str': value.dtype.str,
-            'buffer_size': value.maxBufferSize
-        }
-
-        return metadata
-
-    def _fetch_buffered_array(self, name: str, metadata: Dict[str, Any]):
-        if not Plant.bnaConstructor:
-            raise RuntimeError("BNA constructor (class) needs to be provided to PyPlant.")
-
-        filepath = self._get_buffered_array_filepath(name)
-        if name not in self.bufferedArrays:
-            if not os.path.exists(filepath):
-                return None
-
-            # If the array isn't in the manifest, but exists on disk, attempt to open it.
-            try:
-                self.bufferedArrays[name] = Plant.bnaConstructor(filepath, Warehouse.IBufferedArray.FileMode.update,
-                                                                 metadata['shape'], np.dtype(metadata['dtype_str']),
-                                                                 metadata['buffer_size'])
-            except OSError as e:
-                self.logger.warning("Failed to open the buffered array at '{}' with error: {}"
-                                    .format(filepath, str(e)))
-                self.logger.info("Deleting the corrupted file.")
-                os.remove(filepath)
-                return None
-
-        return self.bufferedArrays[name]
-
     def _get_filepath_from_name(self, fileName: str) -> str:
         return os.path.join(self.baseDir, 'file_{}'.format(fileName))
 
@@ -1442,9 +1309,6 @@ class Warehouse:
             pickle.dump(self.manifest, file)
 
     def close(self):
-        for bna in self.bufferedArrays.values():
-            bna.destruct()
-
         for spec in self.ingredientSpecs.values():
             spec.close()
 
