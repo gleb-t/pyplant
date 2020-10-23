@@ -1,5 +1,6 @@
 from typing import *
 
+from pyplant import specs
 from pyplant.pyplant import *
 # noinspection PyProtectedMember
 from pyplant.pyplant import Warehouse
@@ -25,11 +26,11 @@ def store_reactor_inputs_to_dir(plant: Plant, reactorName: str, dirPath: str):
 def load_ingredients_from_dir(ingredientNames: Optional[Iterable[str]],
                               dirPath: str,
                               logger,
-                              customKerasLayers: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                              customSpecs: Optional[List[specs.IngredientTypeSpec]] = None) -> Dict[str, Any]:
     ingredients = {}
     with Warehouse(dirPath, logger) as warehouse:  # type: Warehouse
-        if customKerasLayers:
-            warehouse.set_custom_keras_layers(customKerasLayers)
+        if customSpecs:
+            warehouse.register_ingredient_specs(customSpecs)
         # Either load specific ingredients or all of them.
         ingredientNames = ingredientNames or warehouse.manifest.keys()
         for name in ingredientNames:
