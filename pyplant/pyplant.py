@@ -10,6 +10,7 @@ import sys
 import time
 import warnings
 from enum import Enum
+from pickle import UnpicklingError
 from types import SimpleNamespace
 from typing import *
 
@@ -41,6 +42,17 @@ def _compute_function_hash(func: Callable) -> str:
 
 def _compute_string_hash(string: str) -> str:
     return hashlib.sha1(string.encode('utf-8')).hexdigest()
+
+
+def _try_pickle_load(file, default=None, logger: Optional[logging.Logger] = None) -> Any:
+    try:
+        return pickle.load(file)
+    except (UnpicklingError, AttributeError, EOFError, ImportError, IndexError) as e:
+        return default
+    except Exception as e:
+        if logger is not None:
+            logger.warning("Unexpected unpickling error.", exc_info=True)
+        return default
 
 
 def ReactorFunc(func):
@@ -191,9 +203,10 @@ class Plant:
         plantPath = os.path.join(self.plantDir, 'plant.pcl')
         if os.path.exists(plantPath):
             with open(plantPath, 'rb') as file:
-                plantCache = pickle.load(file)
-                self.reactors = plantCache['reactors']  # type: Dict[str, Reactor]
-                self.ingredients = plantCache['ingredients']
+                plantCache = _try_pickle_load(file, logger=self.logger)
+                if plantCache is not None:
+                    self.reactors = plantCache['reactors']  # type: Dict[str, Reactor]
+                    self.ingredients = plantCache['ingredients']
 
     @staticmethod
     def _clear_global_state():
@@ -1072,20 +1085,17 @@ class Warehouse:
         self.logger = logger
         self.manifest = {}           # type: Dict[str, Dict[str, Any]]
 
-        try:
-            manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
-            if os.path.exists(manifestPath):
-                with open(manifestPath, 'rb') as file:
-                    self.manifest = pickle.load(file)
+        manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
+        if os.path.exists(manifestPath):
+            with open(manifestPath, 'rb') as file:
+                self.manifest = _try_pickle_load(file, default={}, logger=self.logger)
 
-            self.simpleStorePath = os.path.join(os.path.join(self.baseDir, 'simple.pyplant.pcl'))
-            if os.path.exists(self.simpleStorePath):
-                with open(self.simpleStorePath, 'rb') as file:
-                    self.simpleStore = pickle.load(file)
-            else:
-                self.simpleStore = {}
-        except (pickle.UnpicklingError, ValueError) as e:
-            self.logger.warning("Failed to load the warehouse state. Corrupted files?", exc_info=True)
+        self.simpleStorePath = os.path.join(os.path.join(self.baseDir, 'simple.pyplant.pcl'))
+        if os.path.exists(self.simpleStorePath):
+            with open(self.simpleStorePath, 'rb') as file:
+                self.simpleStore = _try_pickle_load(file, default={}, logger=self.logger)
+        else:
+            self.simpleStore = {}
 
     def __enter__(self):
         return self
@@ -1268,7 +1278,7 @@ class Warehouse:
         path = os.path.join(self.baseDir, '{}.pcl'.format(name))
         if os.path.exists(path):
             with open(path, 'rb') as file:
-                return pickle.load(file)
+                return _try_pickle_load(file, logger=self.logger)
 
         return None
 
