@@ -1,3 +1,4 @@
+import logging
 from typing import *
 
 from pyplant import specs
@@ -7,7 +8,6 @@ from pyplant.pyplant import Warehouse
 
 
 def store_ingredients_to_dir(plant: Plant, ingredientNames: List[str], dirPath: str):
-
     with Warehouse(dirPath, plant.logger) as warehouse:
         warehouse.register_ingredient_specs(plant.warehouse.ingredientSpecs.values())
         for name in ingredientNames:
@@ -23,10 +23,14 @@ def store_reactor_inputs_to_dir(plant: Plant, reactorName: str, dirPath: str):
     return store_ingredients_to_dir(plant, list(reactorObj.inputs), dirPath)
 
 
-def load_ingredients_from_dir(ingredientNames: Optional[Iterable[str]],
-                              dirPath: str,
-                              logger,
+def load_ingredients_from_dir(dirPath: str,
+                              ingredientNames: Optional[Iterable[str]] = None,
+                              logger: Optional[logging.Logger] = None,
                               customSpecs: Optional[List[specs.IngredientTypeSpec]] = None) -> Dict[str, Any]:
+    if logger is None:
+        logger = logging.getLogger('_null')
+        logger.setLevel(logging.CRITICAL)
+
     ingredients = {}
     with Warehouse(dirPath, logger) as warehouse:  # type: Warehouse
         if customSpecs:
@@ -37,4 +41,3 @@ def load_ingredients_from_dir(ingredientNames: Optional[Iterable[str]],
             ingredients[name] = warehouse.fetch(name, signature=None)
 
     return ingredients
-

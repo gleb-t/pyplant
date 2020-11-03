@@ -39,7 +39,7 @@ class UtilsTest(unittest.TestCase):
 
             utils.store_reactor_inputs_to_dir(plant, 'reactor_b', dirPath)
 
-        ingredients = utils.load_ingredients_from_dir(None, dirPath, logging.getLogger())
+        ingredients = utils.load_ingredients_from_dir(dirPath, logger=logging.getLogger())
 
         self.assertEqual(ingredients['object'], {'a': 'a', 'two': 2})
         np.testing.assert_equal(ingredients['ndarray'], np.arange(0, 1000, dtype=np.uint64))
