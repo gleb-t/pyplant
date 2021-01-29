@@ -9,7 +9,8 @@ from pyplant.pyplant import Warehouse
 
 def store_ingredients_to_dir(plant: Plant, ingredientNames: List[str], dirPath: str):
     with Warehouse(dirPath, plant.logger) as warehouse:
-        warehouse.register_ingredient_specs(plant.warehouse.ingredientSpecs.values())
+        # Don't take specs by ref, create new instances. Otherwise we'll close then when closing the warehouse.
+        warehouse.register_ingredient_specs([type(spec)() for spec in plant.warehouse.ingredientSpecs.values()])
         for name in ingredientNames:
             ingredientValue = plant.fetch_ingredient(name)
             ingredientObj = plant.get_ingredient_object(name)
