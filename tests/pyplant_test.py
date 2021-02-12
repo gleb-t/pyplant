@@ -1041,6 +1041,41 @@ class PyPlantTest(unittest.TestCase):
 
         pass
 
+    def test_use_cache_flag(self):
+
+        @ReactorFunc
+        def producer(pipe: Pipework, config):
+            a = [1, 2, 3]
+            b = [4, 5, 6]
+
+            pipe.send('a', a, useCache=True)
+            pipe.send('b', b, useCache=False)
+
+        @ReactorFunc
+        def consumer_first(pipe: Pipework, config):
+            a = yield pipe.receive('a')
+            b = yield pipe.receive('b')
+
+            # It's a dangerous property, that cached ingredients are mutable, but here we could use it for testing.
+            a[0] = -1
+            b[0] = -1
+
+        @ReactorFunc
+        def consumer_second(pipe: Pipework, config):
+            a = yield pipe.receive('a')
+            b = yield pipe.receive('b')
+
+            self.assertEqual(a, [-1, 2, 3])
+            self.assertEqual(b, [4, 5, 6])
+
+        self._construct_plant(ConfigBase(), [producer, consumer_first, consumer_second])
+        self.plant.run_reactor(producer)
+        self.plant.run_reactor(consumer_first)
+        self.plant.run_reactor(consumer_second)
+
+        self.assertIn('consumer_second', self.startedReactors)  # Make sure asserts in the reactor ran.
+
+
 
 class PyPlantWarehouseTest(unittest.TestCase):
 

@@ -854,7 +854,7 @@ class Pipework:
 
         return ingredientValue
 
-    def send(self, name: str, value: Any, type: Union['Ingredient.Type', type, None] = None):
+    def send(self, name: str, value: Any, type: Union['Ingredient.Type', type, None] = None, useCache: bool = True):
         self._logger.debug("Reactor '{}' is sending ingredient '{}'.".format(self._connectedReactor.name, name))
 
         type = self._standardize_type(type)
@@ -862,7 +862,7 @@ class Pipework:
             type = self._warehouse._infer_type_from_value(value)
 
         ingredient = self._register_output(name, type)
-        self._warehouse.store(ingredient, value)
+        self._warehouse.store(ingredient, value, useCache=useCache)
 
     def allocate(self, name: str, type: Union['Ingredient.Type', type], **kwargs):
         self._logger.debug("Reactor '{}' is allocating ingredient '{}'.".format(self._connectedReactor.name, name))
@@ -1079,11 +1079,12 @@ class Warehouse:
 
     def __init__(self, baseDir, logger: logging.Logger):
         self.baseDir = baseDir
-        self.cache = {}              # type: Dict[str, Any]
-        self.simpleStore = {}        # type: Dict[str, Any]
-        self.ingredientSpecs = {}    # type: Dict[str, IngredientTypeSpec]
+        self.cache = {}                # type: Dict[str, Any]
+        self.simpleStore = {}          # type: Dict[str, Any]
+        self.ingredientSpecs = {}      # type: Dict[str, IngredientTypeSpec]
         self.logger = logger
-        self.manifest = {}           # type: Dict[str, Dict[str, Any]]
+        self.manifest = {}             # type: Dict[str, Dict[str, Any]]
+        self.freshIngredients = set()  # type: Set[str]
 
         manifestPath = os.path.join(os.path.join(self.baseDir, 'manifest.pyplant.pcl'))
         if os.path.exists(manifestPath):
@@ -1132,24 +1133,29 @@ class Warehouse:
         type = self.manifest[name]['type']
         meta = self.manifest[name]['metadata']
         if type == Ingredient.Type.simple:
-            return self._fetch_simple(name)
+            value = self._fetch_simple(name)
         elif type == Ingredient.Type.list:
-            return self._fetch_object(name)
+            value = self._fetch_object(name)
         elif type == Ingredient.Type.array:
-            return self._fetch_array(name)
+            value = self._fetch_array(name)
         elif type == Ingredient.Type.object:
-            return self._fetch_object(name)
+            value = self._fetch_object(name)
         elif type == Ingredient.Type.file:
-            return self._fetch_file(name)
+            value = self._fetch_file(name)
         elif type in self.ingredientSpecs:
-            return self.ingredientSpecs[type].fetch(self, name, meta)
+            value = self.ingredientSpecs[type].fetch(self, name, meta)
+        else:
+            raise RuntimeError("Unsupported ingredient type: {}. Ingredient spec missing?".format(type))
 
-        raise RuntimeError("Unsupported ingredient type: {}. Ingredient spec missing?".format(type))
+        if self.manifest[name]['useCache']:
+            self.cache[name] = value
 
-    def store(self, ingredient: Ingredient, value: Any):
+        return value
+
+    def store(self, ingredient: Ingredient, value: Any, useCache: bool = True):
         self.logger.debug("Storing ingredient '{}' in the warehouse.".format(ingredient.name))
 
-        if ingredient.name in self.cache:
+        if ingredient.name in self.freshIngredients:
             raise RuntimeError("Ingredient is being overwritten, this is not yet supported.")
 
         if ingredient.name in self.manifest:
@@ -1177,11 +1183,15 @@ class Warehouse:
         self.manifest[ingredient.name] = {
             'signature': ingredient.signature,
             'type': ingredient.type,
-            'metadata': metadata
+            'metadata': metadata,
+            'useCache': useCache
         }
         self.save_manifest()
 
-        self.cache[ingredient.name] = value
+        self.freshIngredients.add(ingredient.name)
+
+        if useCache:
+            self.cache[ingredient.name] = value
 
     def allocate(self, ingredient: Ingredient, **kwargs):
         self.logger.debug("Allocating storage for ingredient '{}' in the warehouse.".format(ingredient.name))
@@ -1228,7 +1238,7 @@ class Warehouse:
         self.logger.debug("Signing ingredient '{}' with signature '{}'.".format(ingredientName, signature))
         assert(signature is not None)
         assert(ingredientName in self.manifest)  # Did you forget to send an allocated array?
-        assert(ingredientName in self.cache)  # Must be fresh, i.e. must be in cache.
+        assert(ingredientName in self.freshIngredients)  # Must be fresh.
 
         # Store the new signature.
         self.manifest[ingredientName]['signature'] = signature
